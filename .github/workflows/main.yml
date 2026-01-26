@@ -1,8 +1,8 @@
 name: Shark AI 2026
 on:
   schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
+    - cron: '*/30 * * * *'  # Chạy mỗi 30 phút
+  workflow_dispatch:        # Nút bấm chạy thủ công
 jobs:
   run-shark:
     runs-on: ubuntu-latest
