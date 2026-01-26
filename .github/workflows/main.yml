@@ -1,10 +1,11 @@
 name: Shark AI 24/7
 on:
   schedule:
-    - cron: '0 * * * *' # Quét kèo mỗi tiếng
+    - cron: '0 * * * *' # Chạy tự động mỗi tiếng
   workflow_dispatch: # Nút chạy bằng tay
+
 jobs:
-  run-shark:
+  run-bot:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -14,16 +15,14 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      - name: Install Tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests pandas
-      - name: Thong Nong Test
+      - name: Install Libs
+        run: pip install requests pandas
+      - name: Execute Shark
         run: python SharkAPI.py
-      - name: Save Memory
+      - name: Sync Data
         run: |
           git config --global user.name 'Shark-AI'
-          git config --global user.email 'shark@ai.com'
+          git config --global user.email 'bot@shark.ai'
           git add shark_memory.csv
-          git commit -m "Update Memory [skip ci]" || echo "No changes"
+          git commit -m "Update History [skip ci]" || echo "No changes"
           git push
