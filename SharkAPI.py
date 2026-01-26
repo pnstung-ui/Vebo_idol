@@ -1,5 +1,6 @@
 import requests
 import pandas as pd
+import io
 import os
 from datetime import datetime, timedelta
 
@@ -8,19 +9,26 @@ API_KEY = "f45bf78df6e60adb0d2d6d1d9e0f7c1c"
 TELE_TOKEN = "8477918500:AAFCazBYVwDq6iJGlLfVZ-UTCK3B5OFO7XW"
 TELE_CHAT_ID = "957306386"
 MEMORY_FILE = "shark_memory.csv"
+HIST_URL = "https://www.football-data.co.uk/new_fixtures.csv"
 
 def get_now_gmt7():
     return datetime.now() + timedelta(hours=7)
 
+def get_h2h_data():
+    try:
+        r = requests.get(HIST_URL, timeout=15)
+        return pd.read_csv(io.StringIO(r.text))
+    except: return None
+
 def shark_scanner():
-    # Khởi tạo bộ nhớ nếu chưa có
     if not os.path.exists(MEMORY_FILE):
-        pd.DataFrame(columns=['id', 'time', 'match', 'type', 'line', 'odd', 'trap', 'status']).to_csv(MEMORY_FILE, index=False)
+        pd.DataFrame(columns=['time', 'match', 'side', 'line', 'odd', 'tag', 'status']).to_csv(MEMORY_FILE, index=False)
     
+    hist_df = get_h2h_data()
     now = get_now_gmt7()
-    # Quét đa giải: Anh, Đức, Ý, Tây Ban Nha, Hà Lan, Nam Mỹ (Brazil), Mỹ (MLS)
+    # Quét full các giải theo yêu cầu (Châu Âu + Nam Mỹ + Giải cỏ)
     REGIONS = ['soccer_epl', 'soccer_germany_bundesliga', 'soccer_italy_serie_a', 'soccer_spain_la_liga', 
-               'soccer_netherlands_ere_divisie', 'soccer_brazil_campeonato', 'soccer_usa_mls']
+               'soccer_netherlands_ere_divisie', 'soccer_brazil_campeonato', 'soccer_usa_mls', 'soccer_norway_eliteserien']
 
     for sport in REGIONS:
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
@@ -34,41 +42,47 @@ def shark_scanner():
                 if now < start_time < now + timedelta(hours=12):
                     diff = start_time - now
                     countdown = f"{int(diff.total_seconds() // 3600)}h {int((diff.total_seconds() % 3600) // 60)}p"
-                    analyze_logic(m, home, away, start_time, countdown)
+                    
+                    # Lấy kỳ vọng bàn thắng 4 trận (Chân Kinh Lịch Sử)
+                    match_avg = 2.5
+                    if hist_df is not None:
+                        h_matches = hist_df[(hist_df['HomeTeam'] == home) | (hist_df['AwayTeam'] == home)].tail(4)
+                        a_matches = hist_df[(hist_df['HomeTeam'] == away) | (hist_df['AwayTeam'] == away)].tail(4)
+                        if len(h_matches) >= 2: match_avg = (h_matches['Avg>2.5'].mean() + a_matches['Avg>2.5'].mean()) / 2
+
+                    analyze_logic(m, home, away, start_time, countdown, match_avg)
         except: continue
 
-def analyze_logic(match, home, away, start_time, countdown):
+def analyze_logic(match, home, away, start_time, countdown, match_avg):
     bm = match['bookmakers'][0]
     mkts = {mk['key']: mk for mk in bm['markets']}
     
-    # 1. CHÂN KINH TÀI XỈU (Biến thiên & Tiền ép)
+    # 1. TÀI XỈU: ĐỐI CHIẾU H2H VỚI LINE BIẾN THIÊN
     if 'totals' in mkts:
         line = mkts['totals']['outcomes'][0]['point']
         o_p, u_p = mkts['totals']['outcomes'][0]['price'], mkts['totals']['outcomes'][1]['price']
         
-        # Logic Tiền ép (Odd giữ nguyên, tiền tăng -> Odd giảm sâu)
-        if o_p < 1.75: 
+        # Bẫy Dụ Tài: Lịch sử nổ (match_avg cao) nhưng sàn ra Line thấp + Odd Tài cao (nhử ăn)
+        if match_avg > 2.8 and line <= 2.5 and o_p >= 2.0:
+            send_and_log(home, away, "XỈU", line, u_p, "💣 BẪY DỤ TÀI (H2H nổ nhưng Odd nhử)", start_time, countdown)
+        # Tiền ép (Odd giảm sâu dưới 1.75)
+        elif o_p < 1.75:
             send_and_log(home, away, "TÀI", line, o_p, "🔥 TIỀN ÉP TÀI", start_time, countdown)
         elif u_p < 1.75:
             send_and_log(home, away, "XỈU", line, u_p, "❄️ TIỀN ÉP XỈU", start_time, countdown)
-            
-        # Bẫy tâm lý (Dựa trên Odd nhử > 2.05 cho Line thấp/cao vô lý)
-        if o_p >= 2.05 and line <= 2.25:
-            send_and_log(home, away, "XỈU", line, u_p, "💣 BẪY DỤ TÀI (H2H ảo)", start_time, countdown)
 
-    # 2. CHÂN KINH KÈO CHẤP (Thứ hạng & Bẫy dụ)
+    # 2. KÈO CHẤP: BẪY THỨ HẠNG
     if 'spreads' in mkts:
         h_line = mkts['spreads']['outcomes'][0]['point']
-        h_p = mkts['spreads']['outcomes'][0]['price']
+        h_p, a_p = mkts['spreads']['outcomes'][0]['price'], mkts['spreads']['outcomes'][1]['price']
+        # Bẫy Dụ Trên: Đội mạnh chấp thấp + Odd nhử cao
         if h_line >= -0.75 and h_p >= 2.05:
-            send_and_log(home, away, "DƯỚI", h_line, mkts['spreads']['outcomes'][1]['price'], "🛡️ BẪY THỨ HẠNG (DỤ TRÊN)", start_time, countdown)
+            send_and_log(home, away, "DƯỚI", h_line, a_p, "🛡️ BẪY DỤ TRÊN (Thứ hạng ảo)", start_time, countdown)
 
 def send_and_log(home, away, side, line, odd, tag, start_time, countdown):
     msg = (f"🏪 *SHARK RADAR GMT+7*\n🏟️ {home} vs {away}\n🎯 Lệnh: *VẢ {side} {line}*\n"
            f"🚩 Tín hiệu: {tag}\n💰 Odd: {odd}\n⏰ Đá lúc: {start_time.strftime('%H:%M')} (Còn {countdown})")
     requests.post(f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage", json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
-    # Lưu vào CSV để Shark tự học kết quả HÚP/GÃY
     pd.DataFrame([[start_time, f"{home}-{away}", side, line, odd, tag, "WAITING"]]).to_csv(MEMORY_FILE, mode='a', header=False, index=False)
 
-if __name__ == "__main__":
-    shark_scanner()
+if __name__ == "__main__": shark_scanner()
