@@ -1,25 +1,26 @@
-name: Shark API Radar 24/7
-
+name: Shark AI 24/7
 on:
   schedule:
-    # Quét 1 tiếng/lần để tiết kiệm 500 lượt của API Key
-    - cron: '0 * * * *'
-  workflow_dispatch: # Cho phép bấm chạy bằng tay
-
+    - cron: '0 * * * *' # Quét kèo mỗi tiếng
+    - cron: '0 1 * * *' # 8h sáng VN check HÚP/GÃY
+  workflow_dispatch:
 jobs:
-  run-bot:
+  run-shark:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-
-      - name: Install dependencies
+      - uses: actions/checkout@v3
+      - name: Setup
         run: pip install requests pandas
-
-      - name: Run Shark Bot
+      - name: Scanner
         run: python SharkAPI.py
+      - name: Checker
+        run: python Shark_Checker.py
+      - name: Save Memory
+        run: |
+          git config --global user.name 'Shark-AI'
+          git config --global user.email 'shark@ai.com'
+          git add shark_memory.csv
+          git commit -m "Update Memory [skip ci]" || echo "No changes"
+          git push
