@@ -1,96 +1,84 @@
 import requests
+import pandas as pd
+import io
 from datetime import datetime, timedelta
 
 # --- CẤU HÌNH ---
 API_KEY = "f45bf78df6e60adb0d2d6d1d9e0f7c1c"
 TELE_TOKEN = "8477918500:AAFCazBYVwDq6iJGlLfVZ-UTCK3B5OFO7XW"
 TELE_CHAT_ID = "957306386"
+HIST_URL = "https://www.football-data.co.uk/new_fixtures.csv"
 
-# Danh sách giải đấu vét cạn
-REGIONS = [
-    'soccer_epl', 'soccer_germany_bundesliga', 'soccer_italy_serie_a', 
-    'soccer_spain_la_liga', 'soccer_france_ligue_1', 'soccer_uefa_champs_league',
-    'soccer_usa_mls', 'soccer_brazil_campeonato', 'soccer_netherlands_ere_divisie',
-    'soccer_norway_eliteserien', 'soccer_japan_j_league', 'soccer_korea_kleague_1'
-]
+def get_data():
+    try:
+        r_hist = requests.get(HIST_URL, timeout=15)
+        df_hist = pd.read_csv(io.StringIO(r_hist.text))
+        return df_hist
+    except: return None
 
-def shark_scanner():
+def get_team_h2h(df, team):
+    """Lấy phong độ 4 trận gần nhất: [Trung bình bàn thắng, Tỉ lệ thắng kèo]"""
+    try:
+        matches = df[(df['HomeTeam'] == team) | (df['AwayTeam'] == team)].tail(4)
+        if len(matches) < 2: return 2.5, 0.5
+        avg_goals = matches['Avg>2.5'].mean()
+        # Giả lập tỉ lệ thắng dựa trên Odd đóng cửa (nếu có dữ liệu thắng/thua thực tế sẽ chuẩn hơn)
+        win_rate = 0.6 if avg_goals > 2.5 else 0.4 
+        return avg_goals, win_rate
+    except: return 2.5, 0.5
+
+def analyze_all():
+    hist_df = get_data()
     now_gmt7 = datetime.now() + timedelta(hours=7)
-    print(f"--- Radar khởi động: {now_gmt7.strftime('%d/%m %H:%M')} ---")
+    REGIONS = ['soccer_epl', 'soccer_germany_bundesliga', 'soccer_italy_serie_a', 'soccer_spain_la_liga', 'soccer_netherlands_ere_divisie', 'soccer_norway_eliteserien']
 
     for sport in REGIONS:
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-        params = {
-            'apiKey': API_KEY,
-            'regions': 'eu', # Lấy dữ liệu sàn uy tín
-            'markets': 'totals,spreads', # totals = Tài Xỉu, spreads = Kèo Chấp
-            'oddsFormat': 'decimal'
-        }
-        
+        params = {'apiKey': API_KEY, 'regions': 'eu', 'markets': 'totals,spreads', 'oddsFormat': 'decimal'}
         try:
-            r = requests.get(url, params=params)
-            if r.status_code != 200: continue
-            data = r.json()
-            
-            for match in data:
-                home, away = match['home_team'], match['away_team']
-                start_time = datetime.strptime(match['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
+            data = requests.get(url, params=params).json()
+            for m in data:
+                home, away = m['home_team'], m['away_team']
+                start_time = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
                 
-                # Chỉ quét trận trong 12h tới để đảm bảo Odd đang "nhảy"
                 if now_gmt7 < start_time < now_gmt7 + timedelta(hours=12):
-                    analyze_match_full(match, home, away, start_time, sport)
-        except Exception as e:
-            print(f"Lỗi giải {sport}: {e}")
+                    h_goals, h_win = get_team_h2h(hist_df, home)
+                    a_goals, a_win = get_team_h2h(hist_df, away)
+                    match_avg_goals = (h_goals + a_goals) / 2
+                    
+                    bm = m['bookmakers'][0]
+                    markets = {mk['key']: mk for mk in bm['markets']}
 
-def analyze_match_full(match, home, away, start_time, sport):
-    bookmakers = match['bookmakers']
-    if not bookmakers: return
-    
-    # Lấy sàn đầu tiên làm mốc soi
-    bm = bookmakers[0]
-    for market in bm['markets']:
-        
-        # 1. LOGIC TÀI XỈU BIẾN THIÊN
-        if market['key'] == 'totals':
-            line = market['outcomes'][0]['point']
-            over_p = market['outcomes'][0]['price']
-            under_p = market['outcomes'][1]['price']
-            
-            action, trap = "---", "---"
-            
-            # Nhận diện bẫy theo Line & Giải đấu
-            if line < 2.5 and any(x in sport for x in ['netherlands', 'norway', 'germany']):
-                trap = f"⚠️ DỤ TÀI (Line {line} quá thấp)"
-            elif line > 2.75 and any(x in sport for x in ['italy', 'spain']):
-                trap = f"❄️ DỤ XỈU (Line {line} quá cao)"
-            
-            # Logic Tiền ép (Vả theo Odd giảm sâu)
-            if over_p < 1.80:
-                action = f"VẢ TÀI {line} 🔥"
-                if "DỤ XỈU" in trap: action = f"💣 VẢ TÀI {line} MẠNH (Bẻ bẫy)"
-            elif under_p < 1.80:
-                action = f"VẢ XỈU {line} ❄️"
-                if "DỤ TÀI" in trap: action = f"💣 VẢ XỈU {line} MẠNH (Bẻ bẫy)"
-            
-            if "VẢ" in action:
-                send_tele(f"📊 *TÀI XỈU BIẾN THIÊN*\n🏟️ {home} vs {away}\n🏆 Giải: {sport}\n🎯 Lệnh: *{action}*\n🚩 Bẫy: {trap}\n💰 Odd: {over_p if 'TÀI' in action else under_p}\n⏰ {start_time.strftime('%H:%M')}")
+                    # --- 1. CHÂN KINH TÀI XỈU ---
+                    if 'totals' in markets:
+                        line = markets['totals']['outcomes'][0]['point']
+                        o_p = markets['totals']['outcomes'][0]['price']
+                        u_p = markets['totals']['outcomes'][1]['price']
+                        if match_avg_goals > 2.8 and line <= 2.5 and o_p >= 2.0:
+                            send_tele(f"💣 *BẪY DỤ TÀI*\n🏟️ {home}-{away}\n📊 H2H nổ: {match_avg_goals:.2f}\n🎯 Sàn ra: {line} (Odd {o_p})\n👉 *LỆNH: VẢ XỈU*")
+                        elif match_avg_goals < 2.2 and line >= 2.75 and u_p >= 2.0:
+                            send_tele(f"⚠️ *BẪY DỤ XỈU*\n🏟️ {home}-{away}\n📊 H2H khô: {match_avg_goals:.2f}\n🎯 Sàn ra: {line} (Odd {u_p})\n👉 *LỆNH: VẢ TÀI*")
 
-        # 2. LOGIC KÈO CHẤP BIẾN THIÊN (Spreads)
-        elif market['key'] == 'spreads':
-            h_line = market['outcomes'][0]['point'] # Ví dụ -0.75
-            h_price = market['outcomes'][0]['price']
-            a_price = market['outcomes'][1]['price']
-            
-            # Nếu giá cửa nào giảm xuống dưới 1.82 -> Tiền ép cửa đó
-            if h_price < 1.82:
-                send_tele(f"🛡️ *KÈO CHẤP BIẾN THIÊN*\n🏟️ {home} vs {away}\n🎯 Lệnh: *✅ THEO {home} ({h_line})*\n📊 Odd: {h_price}\n⏰ {start_time.strftime('%H:%M')}")
-            elif a_price < 1.82:
-                a_line = market['outcomes'][1]['point']
-                send_tele(f"🛡️ *KÈO CHẤP BIẾN THIÊN*\n🏟️ {home} vs {away}\n🎯 Lệnh: *✅ THEO {away} ({a_line})*\n📊 Odd: {a_price}\n⏰ {start_time.strftime('%H:%M')}")
+                    # --- 2. CHÂN KINH KÈO CHẤP ---
+                    if 'spreads' in markets:
+                        h_line = markets['spreads']['outcomes'][0]['point'] # Mức chấp
+                        h_p = markets['spreads']['outcomes'][0]['price']
+                        a_p = markets['spreads']['outcomes'][1]['price']
+                        
+                        # Bẫy Dụ Trên: Lịch sử thắng (win_rate cao) nhưng chấp thấp + Odd cao
+                        if h_win > 0.5 and h_line >= -0.75 and h_p >= 2.0:
+                            send_tele(f"🛡️ *BẪY DỤ TRÊN*\n🏟️ {home} ({h_line}) vs {away}\n📊 H2H Đội trên rất tốt nhưng chấp lỏng.\n👉 *LỆNH: VẢ DƯỚI (Hòa là húp)*")
+                        # Bẫy Dụ Dưới: Lịch sử kém nhưng Odd dưới nhử ăn cao
+                        elif h_win < 0.4 and a_p >= 2.05:
+                            send_tele(f"💣 *BẪY DỤ DƯỚI*\n🏟️ {home} vs {away}\n📊 H2H Đội dưới nát nhưng Odd nhử cao.\n👉 *LỆNH: VẢ TRÊN*")
+                        
+                        # Logic Tiền ép (Dành cho Odd giảm sâu)
+                        elif h_p < 1.70:
+                            send_tele(f"🔥 *TIỀN ÉP TRÊN*\n🏟️ {home} vs {away}\n🎯 Kèo: {h_line}\n💰 Odd giảm sâu: {h_p}\n👉 *LỆNH: VẢ TRÊN*")
+
+        except: continue
 
 def send_tele(msg):
-    requests.post(f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage", 
-                  json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    requests.post(f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage", json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
-if __name__ == "__main__":
-    shark_scanner()
+if __name__ == "__main__": analyze_all()
