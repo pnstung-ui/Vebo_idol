@@ -10,27 +10,17 @@ TELE_TOKEN = "8477918500:AAFCazBYVwDq6iJGlLfVZ-UTCK3B5OFO7XW"
 TELE_CHAT_ID = "957306386"
 LOG_FILE = "shark_history_log.csv"
 
-# TRẢ LẠI TOÀN BỘ 18 NGUỒN DỮ LIỆU ĐỐI ĐẦU & THAM CHIẾU
+# FULL 25+ NGUỒN DỮ LIỆU TỪ HẠNG 1 ĐẾN HẠNG 3 & GIẢI CỎ TOÀN CẦU
 SOURCES = {
-    "ENG_1": "https://www.football-data.co.uk/mmz4281/2526/E0.csv",
-    "ENG_2": "https://www.football-data.co.uk/mmz4281/2526/E1.csv",
-    "ENG_3": "https://www.football-data.co.uk/mmz4281/2526/E2.csv",
-    "SCO_1": "https://www.football-data.co.uk/mmz4281/2526/SC0.csv",
-    "GER_1": "https://www.football-data.co.uk/mmz4281/2526/D1.csv",
-    "GER_2": "https://www.football-data.co.uk/mmz4281/2526/D2.csv",
-    "SPA_1": "https://www.football-data.co.uk/mmz4281/2526/SP1.csv",
-    "SPA_2": "https://www.football-data.co.uk/mmz4281/2526/SP2.csv",
-    "ITA_1": "https://www.football-data.co.uk/mmz4281/2526/I1.csv",
-    "ITA_2": "https://www.football-data.co.uk/mmz4281/2526/I2.csv",
-    "FRA_1": "https://www.football-data.co.uk/mmz4281/2526/F1.csv",
-    "FRA_2": "https://www.football-data.co.uk/mmz4281/2526/F2.csv",
-    "NETH": "https://www.football-data.co.uk/mmz4281/2526/N1.csv",
-    "BELG": "https://www.football-data.co.uk/mmz4281/2526/B1.csv",
-    "BRAZIL": "https://www.football-data.co.uk/new/BRA.csv",
-    "ARGENTINA": "https://www.football-data.co.uk/new/ARG.csv",
-    "NORWAY": "https://www.football-data.co.uk/new/NOR.csv",
-    "JAPAN": "https://www.football-data.co.uk/new/JPN.csv",
-    "GLOBAL": "https://www.football-data.co.uk/new_fixtures.csv"
+    "ENG": ["E0", "E1", "E2", "E3"], # Ngoại hạng, Hạng nhất, Hạng 2, Hạng 3 Anh
+    "GER": ["D1", "D2"],             # Đức 1, Đức 2
+    "SPA": ["SP1", "SP2"],           # TBN 1, TBN 2
+    "ITA": ["I1", "I2"],             # Ý 1, Ý 2
+    "FRA": ["F1", "F2"],             # Pháp 1, Pháp 2
+    "SCO": ["SC0", "SC1"],           # Scotland 1, 2
+    "EURO": ["N1", "B1", "P1", "T1", "G1"], # Hà Lan, Bỉ, Bồ Đào Nha, Thổ Nhĩ Kỳ, Hy Lạp
+    "AMERICA": ["BRA.csv", "ARG.csv", "MEX.csv", "USA.csv"], # Nam Mỹ & Mỹ
+    "ASIA": ["JPN.csv", "CHN.csv"]    # Nhật, Trung Quốc
 }
 
 def send_tele(msg):
@@ -38,82 +28,86 @@ def send_tele(msg):
     try: requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
     except: pass
 
-def verify_results(db):
-    """Tự động kiểm tra HÚP/GÃY từ dữ liệu mới nhất"""
-    if not os.path.exists(LOG_FILE) or db is None: return
-    logs = pd.read_csv(LOG_FILE)
-    if logs.empty: return
+def get_full_db():
+    all_dfs = []
+    base_url = "https://www.football-data.co.uk/mmz4281/2526/"
+    new_url = "https://www.football-data.co.uk/new/"
     
-    for idx, row in logs[logs['Result'] == 'WAITING'].iterrows():
-        # Tìm trận đấu theo tên đội (khớp 4 ký tự đầu)
-        match_data = db[db['HomeTeam'].str.contains(str(row['Match']).split(' vs ')[0][:4], na=False, case=False)].head(1)
-        if not match_data.empty and not pd.isna(match_data.iloc[0]['FTHG']):
-            hg, ag = int(match_data.iloc[0]['FTHG']), int(match_data.iloc[0]['FTAG'])
-            total = hg + ag
-            res_text = "GÃY ❌"
-            
-            # Logic HÚP/GÃY mặc định theo Line 2.5
-            if "TÀI" in row['Action'] and total > 2.5: res_text = "HÚP ✅"
-            elif "XỈU" in row['Action'] and total < 2.5: res_text = "HÚP ✅"
-            
-            logs.at[idx, 'Result'] = res_text
-            send_tele(f"📊 *TỔNG KẾT:* {row['Match']}\n🎬 Tỉ số: {hg}-{ag}\n💰 Kết quả: *{res_text}*")
-    logs.to_csv(LOG_FILE, index=False)
+    for country, files in SOURCES.items():
+        for f in files:
+            url = f"{base_url}{f}.csv" if len(f) <= 3 else f"{new_url}{f}"
+            try:
+                r = requests.get(url, timeout=15)
+                if r.status_code == 200:
+                    all_dfs.append(pd.read_csv(io.StringIO(r.text), on_bad_lines='skip', engine='python'))
+            except: continue
+    return pd.concat(all_dfs, ignore_index=True) if all_dfs else None
 
 def main():
     now_vn = datetime.now() + timedelta(hours=7)
-    send_tele(f"🚀 *SHARK ULTIMATE V6:* Đã nạp 18 nguồn giải cỏ/hạng dưới. Đang quét...")
+    send_tele(f"🏗️ *SHARK V7:* Đang càn quét Hạng 1-2-3 & Giải cỏ toàn cầu...")
 
-    # Tải toàn bộ 18 nguồn dữ liệu
-    all_dfs = []
-    for name, url in SOURCES.items():
-        try:
-            r = requests.get(url, timeout=25)
-            all_dfs.append(pd.read_csv(io.StringIO(r.text), on_bad_lines='skip', engine='python'))
-        except: continue
-    full_db = pd.concat(all_dfs, ignore_index=True) if all_dfs else None
-
-    # 1. TỰ ĐỘNG CHECK HÚP/GÃY PHIÊN TRƯỚC
-    verify_results(full_db)
-
-    # 2. SOI KÈO MỚI (DIỆN RỘNG)
-    API_SPORTS = ['soccer_epl', 'soccer_efl_championship', 'soccer_england_league1', 'soccer_germany_bundesliga', 
-                  'soccer_germany_bundesliga2', 'soccer_spain_la_liga', 'soccer_spain_segunda_division', 
-                  'soccer_italy_serie_a', 'soccer_italy_serie_b', 'soccer_brazil_campeonato', 
-                  'soccer_japan_j_league', 'soccer_usa_mls', 'soccer_argentina_primera_division']
+    full_db = get_full_db()
     
+    # 1. TỰ ĐỘNG CHECK HÚP/GÃY
+    if full_db is not None and os.path.exists(LOG_FILE):
+        logs = pd.read_csv(LOG_FILE)
+        updated = False
+        for idx, row in logs[logs['Result'] == 'WAITING'].iterrows():
+            match_data = full_db[full_db['HomeTeam'].str.contains(str(row['Match']).split(' vs ')[0][:4], na=False, case=False)].head(1)
+            if not match_data.empty and not pd.isna(match_data.iloc[0]['FTHG']):
+                hg, ag = int(match_data.iloc[0]['FTHG']), int(match_data.iloc[0]['FTAG'])
+                res = "HÚP ✅" if (("TÀI" in row['Action'] and hg+ag > 2.5) or ("XỈU" in row['Action'] and hg+ag < 2.5)) else "GÃY ❌"
+                logs.at[idx, 'Result'] = res
+                send_tele(f"📊 *KẾT QUẢ:* {row['Match']}\n🎬 {hg}-{ag} | *{res}*")
+                updated = True
+        if updated: logs.to_csv(LOG_FILE, index=False)
+
+    # 2. QUÉT API DIỆN RỘNG (GỒM CÁC GIẢI HẠNG DƯỚI)
+    API_KEYS_SOCCER = [
+        'soccer_epl', 'soccer_efl_championship', 'soccer_england_league1', 'soccer_england_league2',
+        'soccer_germany_bundesliga', 'soccer_germany_bundesliga2', 'soccer_germany_3_liga',
+        'soccer_spain_la_liga', 'soccer_spain_segunda_division',
+        'soccer_italy_serie_a', 'soccer_italy_serie_b',
+        'soccer_france_ligue1', 'soccer_france_ligue2',
+        'soccer_brazil_campeonato', 'soccer_japan_j_league', 'soccer_mexico_liga_mx', 'soccer_usa_mls'
+    ]
+
     new_bets = []
-    for sport in API_SPORTS:
+    for sport in API_KEYS_SOCCER:
         try:
             url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-            data = requests.get(url, params={'apiKey': API_KEY, 'regions': 'eu', 'markets': 'totals', 'oddsFormat': 'decimal'}).json()
+            data = requests.get(url, params={'apiKey': API_KEY, 'regions': 'eu', 'markets': 'totals'}).json()
             for m in data:
                 home, away = m['home_team'], m['away_team']
                 st = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
                 
-                if now_vn < st < now_vn + timedelta(hours=14):
-                    # Soi đối đầu H2H (4 trận)
+                if now_vn < st < now_vn + timedelta(hours=18):
+                    # Phân tích H2H
                     h2h = full_db[((full_db['HomeTeam'].str.contains(home[:4], case=False)) & (full_db['AwayTeam'].str.contains(away[:4], case=False))) | 
                                   ((full_db['HomeTeam'].str.contains(away[:4], case=False)) & (full_db['AwayTeam'].str.contains(home[:4], case=False)))].tail(4)
                     avg_g = h2h['FTHG'].add(h2h['FTAG']).mean() if not h2h.empty else 2.5
                     
                     mkts = {mk['key']: mk for mk in m['bookmakers'][0]['markets']}
                     if 'totals' in mkts:
-                        lo_o, lo_u = mkts['totals']['outcomes'][0]['price'], mkts['totals']['outcomes'][1]['price']
+                        o_p, u_p = mkts['totals']['outcomes'][0]['price'], mkts['totals']['outcomes'][1]['price']
                         
-                        action = "---"
-                        # CHÂN KINH: H2H nổ + Tiền ép Xỉu -> VẢ MẠNH XỈU
-                        if avg_g >= 3.0 and lo_o > 2.15 and lo_u < 1.80: action = "💣 VẢ MẠNH XỈU (Bẻ Dụ Tài)"
-                        elif avg_g <= 2.0 and lo_o < 1.80: action = "💣 VẢ MẠNH TÀI (Bẻ Dụ Xỉu)"
-                        elif lo_o < 1.72: action = "VẢ TÀI 🔥"
-                        elif lo_u < 1.72: action = "VẢ XỈU ❄️"
+                        action, reason = "---", ""
+                        # ÁP DỤNG CHÂN KINH CHO GIẢI CỎ
+                        if avg_g >= 3.2 and o_p > 2.18 and u_p < 1.78:
+                            action, reason = "💣 VẢ MẠNH XỈU", "Bẫy Dụ Tài (Sử nổ + Tiền ép Xỉu)"
+                        elif avg_g <= 1.8 and u_p > 2.18 and o_p < 1.78:
+                            action, reason = "💣 VẢ MẠNH TÀI", "Bẫy Dụ Xỉu (Sử khô + Tiền ép Tài)"
+                        elif o_p < 1.68:
+                            action, reason = "VẢ TÀI 🔥", "Tiền ép (Cửa Tài sập sâu)"
+                        elif u_p < 1.68:
+                            action, reason = "VẢ XỈU ❄️", "Tiền ép (Cửa Xỉu sập sâu)"
 
-                        if "VẢ" in action:
-                            send_tele(f"💎 *KÈO:* {home} vs {away}\n🎯 Lệnh: *{action}*\n📊 H2H: {avg_g:.1f} | Odd: T{lo_o:.2f}-X{lo_u:.2f}\n⏰ {st.strftime('%H:%M')}")
+                        if action != "---":
+                            send_tele(f"💎 *GỢI Ý:* {home} vs {away}\n🎯 Lệnh: *{action}*\n📝 Lý do: _{reason}_\n📊 H2H: {avg_g:.1f} | ⏰ {st.strftime('%H:%M')}")
                             new_bets.append({"Match": f"{home} vs {away}", "Action": action, "Result": "WAITING"})
         except: continue
 
-    if new_bets:
-        pd.DataFrame(new_bets).to_csv(LOG_FILE, mode='a', header=not os.path.exists(LOG_FILE), index=False)
+    if new_bets: pd.DataFrame(new_bets).to_csv(LOG_FILE, mode='a', header=not os.path.exists(LOG_FILE), index=False)
 
 if __name__ == "__main__": main()
