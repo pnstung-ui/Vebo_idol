@@ -1,28 +1,21 @@
-name: Shark AI 24/7
+name: Shark AI 2026
 on:
   schedule:
-    - cron: '0 * * * *' # Chạy tự động mỗi tiếng
-  workflow_dispatch: # Nút chạy bằng tay
-
+    - cron: '0 * * * *'
+  workflow_dispatch:
 jobs:
-  run-bot:
+  run-shark:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v3
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
-      - name: Install Libs
-        run: pip install requests pandas
-      - name: Execute Shark
-        run: python SharkAPI.py
-      - name: Sync Data
+          python-version: '3.10'
+      - name: Install Dependencies
         run: |
-          git config --global user.name 'Shark-AI'
-          git config --global user.email 'bot@shark.ai'
-          git add shark_memory.csv
-          git commit -m "Update History [skip ci]" || echo "No changes"
-          git push
+          pip install requests pandas
+      - name: Run Shark Radar
+        run: python SharkAPI.py
+        env:
+          PYTHONUNBUFFERED: 1
