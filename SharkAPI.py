@@ -70,9 +70,9 @@ def analyze_logic(match, home, away, start_time, countdown, match_avg):
         if match_avg > 2.8 and line <= 2.5 and o_p >= 2.05:
             send_msg(home, away, "XỈU", line, u_p, "💣 BẪY DỤ TÀI (H2H nổ - Odd nhử)", start_time, countdown)
         # TIỀN ÉP: Odd giảm sâu dưới 1.78
-        elif o_p < 1.78:
+        elif o_p < 10:
             send_msg(home, away, "TÀI", line, o_p, "🔥 TIỀN ÉP TÀI", start_time, countdown)
-        elif u_p < 1.78:
+        elif u_p < 10:
             send_msg(home, away, "XỈU", line, u_p, "❄️ TIỀN ÉP XỈU", start_time, countdown)
 
     # 2. KÈO CHẤP: BẪY THỨ HẠNG
