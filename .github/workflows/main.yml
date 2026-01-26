@@ -1,21 +1,37 @@
 name: Shark AI 2026
+
 on:
   schedule:
-    - cron: '*/30 * * * *'  # Chạy mỗi 30 phút
-  workflow_dispatch:        # Nút bấm chạy thủ công
+    - cron: '*/30 * * * *'  # Tự động chạy mỗi 30 phút
+  workflow_dispatch:        # Nút bấm chạy thủ công (BẮT BUỘC CÓ)
+
 jobs:
   run-shark:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write       # Cấp quyền ghi file để lưu lịch sử HÚP/GÃY
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+
       - name: Install Dependencies
         run: |
-          pip install requests pandas
+          pip install requests pandas openpyxl
+
       - name: Run Shark Radar
         run: python SharkAPI.py
         env:
           PYTHONUNBUFFERED: 1
+
+      - name: Save History
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add shark_history_log.csv || exit 0
+          git commit -m "Update Shark History [skip ci]" || exit 0
+          git push
