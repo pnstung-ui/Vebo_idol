@@ -1,14 +1,16 @@
 import pandas as pd
 import requests
-import io
 import os
 from datetime import datetime, timedelta
 
-# --- CẤU HÌNH ---
-API_KEY = "f45bf78df6e60adb0d2d6d1d9e0f7c1c" # API lấy Odd Real-time
-TELE_TOKEN = "8477918500:AAFCazBYVwDq6iJGlLfVZ-UTCK3B5Ofo7xw"
+# --- CONFIG ---
+API_KEY = "f45bf78df6e60adb0d2d6d1d9e0f7c1c" # API Real-time
+TELE_TOKEN = "8477918500:AAFCazBYVwDq6iJGlLfVZ-UTCK3B5OFO7XW"
 TELE_CHAT_ID = "957306386"
-HIST_URL = "https://www.football-data.co.uk/new_fixtures.csv"
+
+# Danh sách các giải đấu cần quét sát sao
+REGIONS = ['soccer_epl', 'soccer_germany_bundesliga', 'soccer_italy_serie_a', 'soccer_spain_la_liga', 
+           'soccer_brazil_campeonato', 'soccer_usa_mls', 'soccer_portugal_primeira_liga']
 
 def send_tele(msg):
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
@@ -17,71 +19,88 @@ def send_tele(msg):
 
 def main():
     now_gmt7 = datetime.now() + timedelta(hours=7)
-    send_tele(f"🚀 *VEBO HYBRID:* Đang kết hợp API & Lịch sử...")
+    # Tin nhắn khởi động
+    send_tele(f"📡 *SHARK REAL-TIME:* Đang quét biến động API...")
 
-    # 1. Tải lịch sử 4 trận từ CSV (Để soi Bẫy)
-    hist_df = None
-    try:
-        r = requests.get(HIST_URL, timeout=15)
-        hist_df = pd.read_csv(io.StringIO(r.text))
-    except: pass
-
-    # 2. Lấy Odd biến động Real-time từ API
-    # Quét các giải hot đang diễn ra hoặc sắp đá
-    REGIONS = ['soccer_epl', 'soccer_germany_bundesliga', 'soccer_italy_serie_a', 'soccer_spain_la_liga', 'soccer_brazil_campeonato', 'soccer_usa_mls']
-    
     for sport in REGIONS:
         api_url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-        params = {'apiKey': API_KEY, 'regions': 'eu', 'markets': 'totals', 'oddsFormat': 'decimal'}
+        params = {
+            'apiKey': API_KEY,
+            'regions': 'eu', # Lấy các nhà cái Châu Âu uy tín
+            'markets': 'spreads,totals',
+            'oddsFormat': 'decimal'
+        }
         try:
-            odds_data = requests.get(api_url, params=params).json()
-            for m in odds_data:
+            r = requests.get(api_url, params=params, timeout=15)
+            if r.status_code != 200: continue
+            data = r.json()
+            
+            for m in data:
                 home, away = m['home_team'], m['away_team']
                 st = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
                 
-                # Soi trong vòng 12 tiếng tới
-                if now_gmt7 < st < now_gmt7 + timedelta(hours=12):
-                    bm = m['bookmakers'][0] # Lấy nhà cái đầu tiên (thường là Pinnacle/Bet365)
-                    mkt = bm['markets'][0]
-                    line = mkt['outcomes'][0]['point']
-                    o_p, u_p = mkt['outcomes'][0]['price'], mkt['outcomes'][1]['price']
+                # Chỉ quét trận trong vòng 6 tiếng tới (Thời điểm Odd biến động mạnh nhất)
+                if now_gmt7 < st < now_gmt7 + timedelta(hours=6):
+                    # Lấy dữ liệu từ nhà cái đầu tiên (Thường là Pinnacle/Bet365 làm gốc)
+                    # Trong API, 'bookmakers' được sắp xếp theo độ uy tín
+                    bm = m['bookmakers'][0]
+                    mkts = {mk['key']: mk for mk in bm['markets']}
                     
-                    # --- LOGIC CHÂN KINH KẾT HỢP ---
-                    action, trap = "---", "---"
-                    
-                    # Lấy trung bình bàn thắng từ lịch sử (CSV)
-                    match_avg = 2.5
-                    if hist_df is not None:
-                        combined = pd.concat([hist_df[(hist_df['HomeTeam']==home)|(hist_df['AwayTeam']==home)].tail(4),
-                                            hist_df[(hist_df['HomeTeam']==away)|(hist_df['AwayTeam']==away)].tail(4)])
-                        if not combined.empty: match_avg = combined['Avg>2.5'].mean()
+                    action_chap, action_tx = "---", "---"
+                    tag_chap, tag_tx = "---", "---"
 
-                    # BẮT BẪY (TRAP)
-                    gap = line - match_avg
-                    if gap < -0.4 and o_p >= 2.0: trap = "⚠️ DỤ TÀI (Sàn thấp hơn lịch sử)"
-                    elif gap > 0.4 and u_p >= 2.0: trap = "⚠️ DỤ XỈU (Sàn cao hơn lịch sử)"
+                    # 1. PHÂN TÍCH KÈO CHẤP (Spreads)
+                    if 'spreads' in mkts:
+                        outcome = mkts['spreads']['outcomes']
+                        # Giả định: outcome[0] là đội Home
+                        line = outcome[0]['point']
+                        price_h = outcome[0]['price']
+                        price_a = outcome[1]['price']
+                        
+                        # Logic: Nếu kèo giảm (vd từ -1.5 xuống -1.25) mà tiền tăng -> Vả ngược
+                        # API không có Max/Avg như CSV nên ta so sánh giá trị Odd hiện tại
+                        # Nếu Odd cửa nào > 2.10 (Nhà cái đang nhả tiền) -> Cẩn thận Bẫy
+                        if price_h > 2.15: 
+                            action_chap = f"VẢ DƯỚI ({away})"
+                            tag_chap = "💣 BẪY DỤ TRÊN (Tiền cao bất thường)"
+                        elif price_a > 2.15:
+                            action_chap = f"VẢ TRÊN ({home})"
+                            tag_chap = "💣 BẪY DỤ DƯỚI (Tiền cao bất thường)"
+                        elif price_h < 1.75:
+                            action_chap = f"VẢ TRÊN ({home})"
+                            tag_chap = "🔥 TIỀN ÉP TRÊN"
+                        elif price_a < 1.75:
+                            action_chap = f"VẢ DƯỚI ({away})"
+                            tag_chap = "❄️ TIỀN ÉP DƯỚI"
 
-                    # BẮT BIẾN ĐỘNG (REAL-TIME API)
-                    # Theo nguyên tắc Idol: Odd tăng -> Tài, Tiền giảm (Odd thấp) -> Xỉu
-                    if o_p < 1.75: 
-                        action = "VẢ TÀI 🔥 (Tiền ép mạnh)"
-                    elif u_p < 1.75: 
-                        action = "VẢ XỈU ❄️ (Tiền ép mạnh)"
-                        if "DỤ TÀI" in trap: action = "💣 VẢ XỈU (Bẻ bẫy Dụ Tài)"
-                    
-                    # Thêm điều kiện Odd tăng
-                    if o_p > 2.15: action = "VẢ TÀI 🔥 (Odd tăng)"
+                    # 2. PHÂN TÍCH TÀI XỈU (Totals)
+                    if 'totals' in mkts:
+                        out_tx = mkts['totals']['outcomes']
+                        tx_line = out_tx[0]['point']
+                        p_over = out_tx[0]['price']
+                        p_under = out_tx[1]['price']
+                        
+                        # Chân kinh: Odd tăng thì Tài, Tiền giảm (Odd thấp) thì Xỉu
+                        if p_over > 2.15: 
+                            action_tx = "VẢ TÀI 🔥 (Odd tăng)"
+                        elif p_over < 1.78:
+                            action_tx = "VẢ XỈU ❄️ (Tiền giảm/Ép Xỉu)"
 
-                    if action != "---":
+                    # Gửi tin nhắn nếu có kèo sáng
+                    if action_chap != "---" or action_tx != "---":
                         diff = int((st - now_gmt7).total_seconds() / 60)
-                        msg = (f"🏟️ *{home} vs {away}*\n"
-                               f"🎯 Lệnh: *{action}*\n"
-                               f"🚩 Bẫy: {trap}\n"
-                               f"📊 Odd {line}: T{o_p:.2f} | X{u_p:.2f}\n"
-                               f"📈 H2H Avg: {match_avg:.2f}\n"
-                               f"⏰ Còn {diff}p")
+                        msg = (f"🏪 *SHARK REAL-TIME RADAR*\n"
+                               f"🏟️ {home} vs {away}\n"
+                               f"⏰ {st.strftime('%H:%M')} (Đá sau {diff}p)\n"
+                               f"--------------------------\n"
+                               f"🛡️ *KÈO CHẤP:* {action_chap}\n"
+                               f"🚩 Tín hiệu: {tag_chap}\n"
+                               f"⚽ *TÀI XỈU:* {action_tx}\n"
+                               f"📊 Odd {tx_line}: T{p_over:.2f} | X{p_under:.2f}")
                         send_tele(msg)
-        except: continue
+        except Exception as e:
+            print(f"Lỗi: {e}")
+            continue
 
 if __name__ == "__main__":
     main()
