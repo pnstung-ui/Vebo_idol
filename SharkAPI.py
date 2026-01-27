@@ -15,9 +15,10 @@ def send_tele(msg):
     try: requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
     except: pass
 
-# --- PHẦN 1: LẤY DỮ LIỆU & RANKING (V52) ---
+# --- PHẦN 1: DỮ LIỆU & RANKING (ỔN ĐỊNH TỪ V52) ---
 def get_real_data_and_rankings():
-    sources = ["E0", "E1", "E2", "E3", "D1", "D2", "SP1", "SP2", "I1", "I2", "F1", "F2", "N1", "N2", "B1", "B2", "P1", "T1", "G1", "BRA.csv", "ARG.csv"]
+    sources = ["E0", "E1", "E2", "E3", "D1", "D2", "SP1", "SP2", "I1", "I2", "F1", "F2", 
+               "N1", "N2", "B1", "B2", "P1", "T1", "G1", "BRA.csv", "ARG.csv", "MEX.csv"]
     all_dfs = []
     for s in sources:
         url = f"https://www.football-data.co.uk/new/{s}" if ".csv" in s else f"https://www.football-data.co.uk/mmz4281/2526/{s}.csv"
@@ -39,18 +40,7 @@ def get_real_data_and_rankings():
     rankings = {team: r + 1 for r, (team, pts) in enumerate(sorted(table.items(), key=lambda x: x[1], reverse=True))}
     return full_db, rankings
 
-def find_rank(team_name, rankings):
-    if team_name in rankings: return rankings[team_name]
-    for k in rankings:
-        if k in team_name or team_name in k or k[:4] == team_name[:4]: return rankings[k]
-    return None
-
-# --- PHẦN 2: LƯU TRỮ & ĐỐI CHIẾU (V57) ---
-def save_trap_log(home, away, trap_type, pick, line):
-    new_entry = pd.DataFrame([{'Time': (datetime.now() + timedelta(hours=7)).strftime('%H:%M %d/%m'), 'Match': f"{home} vs {away}", 'Trap': trap_type, 'Pick': pick, 'Line': line, 'Status': 'WAITING'}])
-    if not os.path.isfile(DB_FILE): new_entry.to_csv(DB_FILE, index=False)
-    else: new_entry.to_csv(DB_FILE, mode='a', header=False, index=False)
-
+# --- PHẦN 2: ĐỐI CHIẾU KẾT QUẢ (V59) ---
 def audit_results():
     if not os.path.isfile(DB_FILE): return
     df = pd.read_csv(DB_FILE)
@@ -58,7 +48,7 @@ def audit_results():
     if waiting.empty: return
     try:
         scores = requests.get(f"https://api.the-odds-api.com/v4/sports/soccer/scores/?daysFrom=1&apiKey={API_KEY}").json()
-        report = "📝 *ĐỐI CHIẾU KẾT QUẢ BẪY*\n"
+        report = "📝 *CHỐT HIỆU QUẢ CHÂN KINH*\n\n"
         has_up = False
         for s in scores:
             if s.get('completed'):
@@ -74,55 +64,67 @@ def audit_results():
                     elif "TRÊN" in pick and (h_s - line > a_s): win = True
                     res = "✅ ĐÚNG" if win else "❌ SAI"
                     df.loc[idx[0], 'Status'] = res
-                    report += f"🏟️ {m_name}: {h_s}-{a_s} -> *{res}*\n"
+                    icon = "🚨" if "MẠNH" in pick else "📋"
+                    report += f"{icon} {m_name}: {h_s}-{a_s} -> *{res}*\n"
                     has_up = True
         if has_up:
             df.to_csv(DB_FILE, index=False)
             send_tele(report)
     except: pass
 
-# --- PHẦN 3: LOGIC CHÍNH ---
+def save_log(match, trap, pick, line):
+    new = pd.DataFrame([{'Match': match, 'Trap': trap, 'Pick': pick, 'Line': line, 'Status': 'WAITING'}])
+    if not os.path.isfile(DB_FILE): new.to_csv(DB_FILE, index=False)
+    else: new.to_csv(DB_FILE, mode='a', header=False, index=False)
+
+# --- PHẦN 3: LOGIC CHÍNH (BỔ SUNG CHÂN KINH KÈO CHẤP) ---
 def main():
-    now_vn = datetime.now() + timedelta(hours=7)
-    # Báo cáo bắt đầu & Kiểm tra kết quả cũ
-    audit_results()
-    
+    audit_results() # Đối chiếu trước
     db, rankings = get_real_data_and_rankings()
     api_url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
     params = {'apiKey': API_KEY, 'regions': 'eu', 'markets': 'spreads,totals'}
     try: data = requests.get(api_url, params=params).json()
     except: return
 
+    now_vn = datetime.now() + timedelta(hours=7)
     for m in data:
         home, away = m['home_team'], m['away_team']
         st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
         if now_vn < st_vn < now_vn + timedelta(hours=12):
-            h_r, a_r = find_rank(home, rankings), find_rank(away, rankings)
-            h2h = db[((db['HomeTeam'].str[:3] == home[:3]) & (db['AwayTeam'].str[:3] == away[:3])) | ((db['HomeTeam'].str[:3] == away[:3]) & (db['AwayTeam'].str[:3] == home[:3]))]
-            avg_g = h2h['FTHG'].add(h2h['FTAG']).mean() if not h2h.empty else 2.5
-
+            h_r = rankings.get(next((k for k in rankings if home[:4] in k or k[:4] in home), None))
+            a_r = rankings.get(next((k for k in rankings if away[:4] in k or k[:4] in away), None))
+            
             for bm in m.get('bookmakers', [])[:1]:
                 mkts = {mk['key']: mk for mk in bm['markets']}
-                # Chân kinh Chấp
-                if 'spreads' in mkts and h_r and a_r:
-                    l, p = mkts['spreads'].get('point', 0), mkts['spreads']['outcomes'][0].get('price', 0)
-                    r_diff = abs(h_r - a_r)
-                    trap = "DỤ TRÊN" if r_diff >= 5 and abs(l) <= 0.5 else "Bình thường"
+                
+                # --- CHÂN KINH KÈO CHẤP (BỔ SUNG) ---
+                if 'spreads' in mkts:
+                    l = mkts['spreads']['outcomes'][0].get('point', 0)
+                    p = mkts['spreads']['outcomes'][0].get('price', 0)
+                    # Bẫy chấp (Trap)
+                    is_trap = (h_r and a_r and abs(h_r - a_r) >= 5 and abs(l) <= 0.5)
+                    # Tiền (Money Flow)
                     money = "ÉP DƯỚI" if p > 2.05 else "ÉP TRÊN" if p < 1.85 else "ỔN ĐỊNH"
-                    if trap != "Bình thường":
-                        pick = "VẢ DƯỚI" if trap == "DỤ TRÊN" and money == "ÉP DƯỚI" else "THEO DÕI"
-                        save_trap_log(home, away, trap, pick, abs(l))
-                        send_tele(f"🏟️ *{home} vs {away}*\n🪤 Bẫy: {trap} | 💰 {money}\n🚨 Lệnh: *{pick}*")
-                # Chân kinh Tài Xỉu
-                if 'totals' in mkts:
-                    tl, tp = mkts['totals'].get('point', 0), mkts['totals']['outcomes'][0].get('price', 0)
-                    txtrap = "DỤ TÀI" if tl < (avg_g - 0.45) else "DỤ XỈU" if tl > (avg_g + 0.45) else "Bình thường"
-                    if txtrap != "Bình thường":
-                        txpick = "VẢ XỈU" if txtrap == "DỤ TÀI" and tp > 2.0 else "VẢ TÀI" if txtrap == "DỤ XỈU" and tp < 1.85 else "THEO DÕI"
-                        save_trap_log(home, away, txtrap, txpick, tl)
-                        send_tele(f"⚽ *{home} vs {away}*\n🪤 Bẫy TX: {txtrap} (Sử: {avg_g:.1f})\n🚨 Lệnh: *{txpick}*")
+                    
+                    if is_trap:
+                        pick = "🚨 VẢ MẠNH CỬA DƯỚI" if money == "ÉP DƯỚI" else "BÁO TRAP DỤ TRÊN"
+                        save_log(f"{home} vs {away}", "DỤ TRÊN", pick, abs(l))
+                        send_tele(f"🏟️ *BẪY CHẤP: {home} vs {away}*\n📈 Rank: {h_r} vs {a_r}\n🎯 Chấp: {l} | Odd: {p}\n🪤 Bẫy: DỤ TRÊN (KÈO THỐI)\n💰 Tiền: {money}\n👉 Lệnh: *{pick}*")
 
-    send_tele(f"✅ Hẹn 1 tiếng sau quét lại! 🦈")
+                # --- CHÂN KINH TÀI XỈU ---
+                if 'totals' in mkts:
+                    tl = mkts['totals']['outcomes'][0].get('point', 0)
+                    tp = mkts['totals']['outcomes'][0].get('price', 0)
+                    # Odd giữ nguyên, tiền tăng (giảm sâu) -> Xỉu | Tiền giảm (tăng cao) -> Tài
+                    tx_pick = "THEO DÕI"
+                    if tp < 1.85: tx_pick = "VẢ TÀI"
+                    elif tp > 2.05: tx_pick = "VẢ XỈU"
+                    
+                    if tx_pick != "THEO DÕI":
+                        save_log(f"{home} vs {away}", "TIỀN BIẾN ĐỘNG", tx_pick, tl)
+                        # send_tele(f"⚽ *TÀI XỈU: {home} vs {away}*\n🎯 Mốc: {tl} | Odd: {tp}\n🚨 Lệnh: {tx_pick}")
+
+    send_tele(f"✅ Đã quét xong phiên {now_vn.strftime('%H:%M')}. Shark đang rình rập... 🦈")
 
 if __name__ == "__main__":
     main()
