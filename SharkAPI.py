@@ -14,68 +14,63 @@ def send_tele(msg):
     try: requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
     except: pass
 
-def get_h2h_db():
-    all_dfs = []
-    # Quét sạch các giải hạng 1-4 để lấy gốc H2H
-    sources = ["E0", "E1", "E2", "E3", "D1", "D2", "SP1", "SP2", "I1", "I2", "F1", "F2", "BRA.csv", "ARG.csv"]
-    for f in sources:
-        url = f"https://www.football-data.co.uk/mmz4281/2526/{f}.csv" if len(f) <= 3 else f"https://www.football-data.co.uk/new/{f}"
-        try:
-            r = requests.get(url, timeout=10)
-            if r.status_code == 200: all_dfs.append(pd.read_csv(io.StringIO(r.text)))
-        except: continue
-    return pd.concat(all_dfs, ignore_index=True) if all_dfs else None
-
 def main():
     now_vn = datetime.now() + timedelta(hours=7)
-    # TEST THÔNG NÒNG: Nhắn ngay khi chạy
-    send_tele(f"🔥 *SHARK V23 RADAR ONLINE*\n🛰️ Đang quét toàn bộ Odd động API...")
+    send_tele(f"📡 *SHARK REAL-TIME V26*\n🔄 Đang phân tích Odd động từ API...")
 
-    db = get_h2h_db()
+    # 1. LẤY DỮ LIỆU TỪ API (Lấy nhiều nhà cái để so sánh)
     api_url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
-    # Quét cả Tài Xỉu (totals) và Chấp (spreads)
-    params = {'apiKey': API_KEY, 'regions': 'eu', 'markets': 'totals,spreads', 'oddsFormat': 'decimal'}
+    params = {'apiKey': API_KEY, 'regions': 'eu', 'markets': 'totals', 'oddsFormat': 'decimal'}
     data = requests.get(api_url, params=params).json()
 
     for m in data:
         home, away = m['home_team'], m['away_team']
         st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
 
-        # Quét các trận trong 15 tiếng tới
         if now_vn < st_vn < now_vn + timedelta(hours=15):
-            h2h = db[((db['HomeTeam'].str.contains(home[:4], case=False, na=False)) & (db['AwayTeam'].str.contains(away[:4], case=False, na=False)))]
-            avg_g = h2h['FTHG'].add(h2h['FTAG']).mean() if not h2h.empty else 2.5
-            
+            # 2. TÍNH TOÁN ODD ĐỘNG (Không dùng số chết nữa)
+            all_over_odds = []
             for bm in m['bookmakers']:
-                mkts = {mk['key']: mk for mk in bm['markets']}
-                
-                # --- [1] LOGIC TÀI XỈU (VẢ CẢ TÀI LẪN XỈU) ---
-                if 'totals' in mkts:
-                    o_p = mkts['totals']['outcomes'][0]['price'] # Odd Tài
-                    u_p = mkts['totals']['outcomes'][1]['price'] # Odd Xỉu
-                    
-                    # Bẫy Dụ: Sử nổ (>3.0) mà Odd Tài > 2.0 -> VẢ XỈU ❄️
-                    if avg_g >= 3.0 and o_p > 2.00:
-                        send_tele(f"⚽ {home} vs {away}\n🎯 *Lệnh: 💣 VẢ MẠNH XỈU*\n📊 Lý do: Dụ Tài (Sử {avg_g:.1f} - Odd {o_p:.2f})")
-                    
-                    # Bẫy Dụ: Sử khô (<2.0) mà Odd Xỉu > 2.0 -> VẢ TÀI 🔥
-                    elif avg_g <= 2.0 and u_p > 2.00:
-                        send_tele(f"⚽ {home} vs {away}\n🎯 *Lệnh: 💣 VẢ MẠNH TÀI*\n📊 Lý do: Dụ Xỉu (Sử {avg_g:.1f} - Odd {u_p:.2f})")
+                for mkt in bm['markets']:
+                    if mkt['key'] == 'totals':
+                        all_over_odds.append(mkt['outcomes'][0]['price']) # Lấy giá Tài (Over)
 
-                # --- [2] LOGIC KÈO CHẤP (VẢ CẢ TRÊN LẪN DƯỚI) ---
-                if 'spreads' in mkts:
-                    h_p = mkts['spreads']['outcomes'][0]['price'] # Đội nhà (Thường là kèo trên)
-                    a_p = mkts['spreads']['outcomes'][1]['price'] # Đội khách (Thường là kèo dưới)
-                    
-                    # Tiền ép kèo trên (Sập dưới 1.65)
-                    if h_p < 1.65:
-                        send_tele(f"⚽ {home} vs {away}\n🎯 *Lệnh: 🔥 VẢ TRÊN {home}*\n📈 Lý do: TIỀN ÉP CHẾT CỬA ({h_p:.2f})")
-                    
-                    # Tiền ép kèo dưới (Odd khách sập sâu)
-                    elif a_p < 1.65:
-                        send_tele(f"⚽ {home} vs {away}\n🎯 *Lệnh: ❄️ VẢ DƯỚI {away}*\n📈 Lý do: DÒNG TIỀN ĐỔ VỀ DƯỚI ({a_p:.2f})")
+            if len(all_over_odds) < 2: continue # Không đủ dữ liệu so sánh thì bỏ qua
 
-    send_tele(f"✅ Quét xong. Hệ thống Radar đang trực chiến!")
+            avg_market_over = sum(all_over_odds) / len(all_over_odds) # Trung bình thị trường (Opening giả lập)
+            live_over = all_over_odds[0] # Lấy nhà cái đầu tiên làm Live (ví dụ Bet365/Pinnacle)
+            
+            # 3. BIẾN THIÊN (Delta) - TIỀN TĂNG/GIẢM
+            # Delta dương (>0): Live thấp hơn trung bình -> Tiền đang đổ vào, ép Odd giảm.
+            # Delta âm (<0): Live cao hơn trung bình -> Nhà cái đang thả, dụ người chơi.
+            delta = avg_market_over - live_over
+            
+            action = "---"
+            # ÁP DỤNG NGUYÊN TẮC IDOL VỚI ODD ĐỘNG:
+            
+            # BÀI 1: ODD GIỮ NGUYÊN, TIỀN TĂNG THÌ XỈU (Delta rất nhỏ nhưng vẫn có xu hướng ép)
+            if abs(delta) < 0.02 and delta > 0: 
+                action = "❄️ VẢ XỈU (Tiền tăng - Odd ngang)"
+            
+            # BÀI 2: ODD GIỮ NGUYÊN, TIỀN GIẢM THÌ TÀI
+            elif abs(delta) < 0.02 and delta < 0:
+                action = "🔥 VẢ TÀI (Tiền giảm - Odd ngang)"
+
+            # BÀI 3: ODD GIẢM THÌ XỈU (Live thấp hơn hẳn trung bình)
+            elif delta > 0.05:
+                action = "❄️ VẢ XỈU (Odd giảm mạnh)"
+
+            # BÀI 4: ODD TĂNG THÌ TÀI (Live cao hơn hẳn trung bình)
+            elif delta < -0.05:
+                action = "🔥 VẢ TÀI (Odd tăng mạnh)"
+
+            if action != "---":
+                msg = (f"⚽ *{home} vs {away}*\n"
+                       f"🎯 Lệnh: *{action}*\n"
+                       f"📊 Opening (Avg): {avg_market_over:.2f}\n"
+                       f"📈 Live: {live_over:.2f}\n"
+                       f"📉 Biến động: {'+' if delta>0 else ''}{delta:.2f}")
+                send_tele(msg)
 
 if __name__ == "__main__":
     main()
