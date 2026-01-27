@@ -1,37 +1,40 @@
-name: Shark AI 2026
+name: Shark AI Automated
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # Tự động chạy mỗi 30 phút
-  workflow_dispatch:        # Nút bấm chạy thủ công (BẮT BUỘC CÓ)
+    - cron: '*/30 * * * *' # Chạy mỗi 30 phút một lần
+  workflow_dispatch: # Cho phép Idol bấm nút "Run workflow" để chạy tay bất cứ lúc nào
 
 jobs:
-  run-shark:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write       # Cấp quyền ghi file để lưu lịch sử HÚP/GÃY
     steps:
-      - name: Checkout Code
+      # Bước 1: Lấy code từ GitHub về máy ảo
+      - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          persist-credentials: true
 
-      - name: Setup Python
+      # Bước 2: Cài đặt Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.9'
 
-      - name: Install Dependencies
+      # Bước 3: Cài đặt thư viện cần thiết
+      - name: Install dependencies
         run: |
-          pip install requests pandas openpyxl
+          pip install pandas requests
 
-      - name: Run Shark Radar
+      # Bước 4: Chạy file SharkAPI (Đúng tên Idol đang đặt)
+      - name: Run Shark AI
         run: python SharkAPI.py
-        env:
-          PYTHONUNBUFFERED: 1
 
+      # Bước 5: QUAN TRỌNG NHẤT - Đẩy file History ngược lại GitHub để lưu trữ
       - name: Commit and push changes
-      run: |
-        git config --global user.name "pnstung-ui"
-        git config --global user.email "your-email@example.com"
-        git add shark_history_log.csv
-        git commit -m "Update Shark History [skip ci]" || exit 0
-        git push
+        run: |
+          git config --global user.name "Shark-Bot-Automated"
+          git config --global user.email "bot@sharkai.com"
+          git add shark_history_log.csv
+          git commit -m "Shark update history [skip ci]" || exit 0
+          git push
