@@ -2,78 +2,73 @@ import pandas as pd
 import requests
 import io
 import os
-import sys
 from datetime import datetime, timedelta
 
-# --- CẤU HÌNH ---
+# --- THÔNG TIN ĐÃ CẬP NHẬT ---
 API_KEY = "f45bf78df6e60adb0d2d6d1d9e0f7c1c"
-TELE_TOKEN = "8477918500:AAFCazBYVwDq6iJGlLfVZ-UTCK3B5OFO7XW"
+TELE_TOKEN = "7981423606:AAFvJ5Xin_L62k-q0lKY8BPpoOa4PSoE7Ys"
 TELE_CHAT_ID = "957306386"
 
 def send_tele(msg):
-    print(f"--- GỬI TELEGRAM: {msg[:50]}... ---")
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
     try:
         r = requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
-        print(f"Kết quả gửi: {r.status_code} - {r.text}")
+        print(f"📡 Status: {r.status_code} | {r.text}")
         return r.status_code == 200
     except Exception as e:
-        print(f"Lỗi kết nối Tele: {e}")
+        print(f"❌ Lỗi: {e}")
         return False
 
 def main():
     now_vn = datetime.now() + timedelta(hours=7)
-    
-    # 1. TEST THÔNG NÒNG NGAY LẬP TỨC
-    print(f"Bắt đầu chạy Shark V27 lúc: {now_vn}")
-    send_tele(f"🚨 *SHARK V27 CHÀO IDOL!*\n⏱ Time: {now_vn.strftime('%H:%M:%S')}\n🚀 Radar Odd động đang bắt đầu quét...")
+    # PHÁT SÚNG CHÀO SÂN CỦA IDOL_VEBO_BOT
+    send_tele(f"🦈 *IDOL_VEBO_BOT ONLINE!* 🦈\n🚀 Radar Shark V29.1 đã sẵn sàng vả kèo.\n⏰ Khởi động: {now_vn.strftime('%H:%M:%S')}")
 
-    # 2. LẤY ODD ĐỘNG TỪ API
     api_url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
-    params = {'apiKey': API_KEY, 'regions': 'eu', 'markets': 'totals', 'oddsFormat': 'decimal'}
+    params = {'apiKey': API_KEY, 'regions': 'eu', 'markets': 'totals,spreads', 'oddsFormat': 'decimal'}
     
     try:
-        print("Đang gọi API Odds...")
-        response = requests.get(api_url, params=params)
-        data = response.json()
-        print(f"Tìm thấy {len(data)} trận đấu từ API.")
-    except Exception as e:
-        print(f"Lỗi API: {e}")
-        return
+        data = requests.get(api_url, params=params).json()
+    except: return
 
     for m in data:
         home, away = m['home_team'], m['away_team']
-        
-        # Lấy danh sách Odd của tất cả nhà cái để tính trung bình (Opening động)
-        all_over_odds = []
-        for bm in m.get('bookmakers', []):
-            for mkt in bm['markets']:
-                if mkt['key'] == 'totals':
-                    all_over_odds.append(mkt['outcomes'][0]['price'])
+        st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
 
-        if len(all_over_odds) < 2: continue
+        if now_vn < st_vn < now_vn + timedelta(hours=15):
+            for bm in m.get('bookmakers', []):
+                mkts = {mk['key']: mk for mk in bm['markets']}
+                
+                # --- [PHÂN TÍCH TÀI XỈU ĐỘNG] ---
+                if 'totals' in mkts:
+                    all_overs = [mk['outcomes'][0]['price'] for b in m['bookmakers'] for mk in b['markets'] if mk['key'] == 'totals']
+                    if len(all_overs) >= 3:
+                        avg_mkt = sum(all_overs) / len(all_overs)
+                        live_o = mkts['totals']['outcomes'][0]['price']
+                        delta = avg_mkt - live_o
 
-        avg_market = sum(all_over_odds) / len(all_over_odds) # Odd trung bình (Gốc)
-        live_odd = all_over_odds[0] # Odd nhà cái chính (Live)
-        delta = avg_market - live_odd # Độ lệch
+                        action = "---"
+                        # CHÂN KINH: ODD NGANG - TIỀN BIẾN (DELTA CỰC NHẠY 0.005)
+                        if abs(delta) < 0.02:
+                            if delta > 0.005: action = "❄️ VẢ XỈU (Tiền tăng - Odd ngang)"
+                            elif delta < -0.005: action = "🔥 VẢ TÀI (Tiền giảm - Odd ngang)"
+                        
+                        elif delta > 0.04: action = "❄️ VẢ XỈU (Odd giảm/Tiền ép)"
+                        elif delta < -0.04: action = "🔥 VẢ TÀI (Odd tăng/Tiền nhả)"
 
-        action = "---"
-        # NGUYÊN TẮC IDOL: ODD GIỮ NGUYÊN - TIỀN TĂNG/GIẢM
-        # Nới lỏng mốc 0.01 để thông nòng
-        if abs(delta) < 0.02:
-            if delta > 0.005: action = "❄️ VẢ XỈU (Tiền tăng - Odd ngang)"
-            elif delta < -0.005: action = "🔥 VẢ TÀI (Tiền giảm - Odd ngang)"
-        
-        # ODD DỊCH CHUYỂN MẠNH
-        elif delta > 0.04: action = "❄️ VẢ XỈU (Odd sập mạnh)"
-        elif delta < -0.04: action = "🔥 VẢ TÀI (Odd tăng mạnh)"
+                        if action != "---":
+                            send_tele(f"💎 *TÀI XỈU REAL-TIME*\n⚽ {home} vs {away}\n🎯 Lệnh: *{action}*\n📈 Gốc: {avg_mkt:.2f} ➡️ Live: {live_o:.2f}")
 
-        if action != "---":
-            msg = (f"🆔 *SHARK_V27*\n⚽ {home} vs {away}\n🎯 Lệnh: *{action}*\n"
-                   f"📊 Mốc gốc (Avg): {avg_market:.2f}\n📈 Live hiện tại: {live_odd:.2f}")
-            send_tele(msg)
+                # --- [PHÂN TÍCH CHẤP ĐỘNG] ---
+                if 'spreads' in mkts:
+                    h_p = mkts['spreads']['outcomes'][0]['price']
+                    a_p = mkts['spreads']['outcomes'][1]['price']
+                    if h_p < 1.68:
+                        send_tele(f"🚩 *KÈO CHẤP ĐỘNG*\n⚽ {home} vs {away}\n🎯 Lệnh: *🔥 VẢ TRÊN {home}*\n💰 Odd ép sập: {h_p:.2f}")
+                    elif a_p < 1.68:
+                        send_tele(f"🚩 *KÈO CHẤP ĐỘNG*\n⚽ {home} vs {away}\n🎯 Lệnh: *❄️ VẢ DƯỚI {away}*\n💰 Odd ép sập: {a_p:.2f}")
 
-    print("Chu kỳ quét kết thúc.")
+    print("Hoàn thành.")
 
 if __name__ == "__main__":
     main()
