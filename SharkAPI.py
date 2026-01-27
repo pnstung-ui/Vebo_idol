@@ -4,24 +4,24 @@ import io
 import os
 from datetime import datetime, timedelta
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH ĐỒNG BỘ TÊN FILE CỦA IDOL ---
 API_KEY = "f45bf78df6e60adb0d2d6d1d9e0f7c1c"
 TELE_TOKEN = "7981423606:AAFvJ5Xin_L62k-q0lKY8BPpoOa4PSoE7Ys"
 TELE_CHAT_ID = "957306386"
-DB_FILE = "shark_master_log.csv"
+DB_FILE = "shark_history_log.csv" # Đã đổi tên khớp với ảnh GitHub của Idol
 
 def send_tele(msg):
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
     try: requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
     except: pass
 
-# --- 1. ĐỐI CHIẾU KẾT QUẢ (GIỮ NGUYÊN TINH HOA V59) ---
 def audit_results():
     if not os.path.isfile(DB_FILE): return
-    df = pd.read_csv(DB_FILE)
-    waiting = df[df['Status'] == 'WAITING']
-    if waiting.empty: return
     try:
+        df = pd.read_csv(DB_FILE)
+        waiting = df[df['Status'] == 'WAITING']
+        if waiting.empty: return
+        
         scores = requests.get(f"https://api.the-odds-api.com/v4/sports/soccer/scores/?daysFrom=1&apiKey={API_KEY}").json()
         report = "📝 *ĐỐI CHIẾU KẾT QUẢ PHIÊN TRƯỚC*\n\n"
         has_up = False
@@ -44,14 +44,16 @@ def audit_results():
         if has_up:
             df.to_csv(DB_FILE, index=False)
             send_tele(report)
-    except: pass
+    except Exception as e: print(f"Lỗi audit: {e}")
 
 def save_log(match, trap, pick, line):
-    new = pd.DataFrame([{'Match': match, 'Trap': trap, 'Pick': pick, 'Line': line, 'Status': 'WAITING'}])
-    if not os.path.isfile(DB_FILE): new.to_csv(DB_FILE, index=False)
-    else: new.to_csv(DB_FILE, mode='a', header=False, index=False)
+    """Ghi đè hoặc tạo mới file history đúng tên Idol đang dùng"""
+    new_entry = pd.DataFrame([{'Match': match, 'Trap': trap, 'Pick': pick, 'Line': line, 'Status': 'WAITING'}])
+    if not os.path.isfile(DB_FILE):
+        new_entry.to_csv(DB_FILE, index=False)
+    else:
+        new_entry.to_csv(DB_FILE, mode='a', header=False, index=False)
 
-# --- 2. LẤY RANKING & SỬ (TỪ V52) ---
 def get_rankings_and_db():
     sources = ["E0", "E1", "E2", "E3", "D1", "D2", "SP1", "SP2", "I1", "I2", "F1", "F2", "B1", "BRA.csv", "ARG.csv"]
     all_dfs = []
@@ -74,7 +76,6 @@ def get_rankings_and_db():
     rankings = {team: r + 1 for r, (team, pts) in enumerate(sorted(table.items(), key=lambda x: x[1], reverse=True))}
     return full_db, rankings
 
-# --- 3. PHÂN TÍCH SONG SONG KÈO CHẤP & TÀI XỈU ---
 def main():
     audit_results()
     db, rankings = get_rankings_and_db()
@@ -89,11 +90,8 @@ def main():
         st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
         
         if now_vn < st_vn < now_vn + timedelta(hours=12):
-            # Tìm Rank thông minh hơn (chỉ cần khớp 4 ký tự đầu)
             h_r = rankings.get(next((k for k in rankings if home[:4].lower() in k.lower()), None))
             a_r = rankings.get(next((k for k in rankings if away[:4].lower() in k.lower()), None))
-            
-            # Tham chiếu Sử
             h2h = db[((db['HomeTeam'].str[:3] == home[:3]) & (db['AwayTeam'].str[:3] == away[:3])) | 
                      ((db['HomeTeam'].str[:3] == away[:3]) & (db['AwayTeam'].str[:3] == home[:3]))]
             avg_g = h2h['FTHG'].add(h2h['FTAG']).mean() if not h2h.empty else 2.5
@@ -101,26 +99,23 @@ def main():
             for bm in m.get('bookmakers', [])[:1]:
                 mkts = {mk['key']: mk for mk in bm['markets']}
                 
-                # --- KHỐI 1: CHUYÊN BIỆT KÈO CHẤP ---
+                # --- LUỒNG KÈO CHẤP ---
                 if 'spreads' in mkts:
                     l = mkts['spreads']['outcomes'][0].get('point', 0)
                     p = mkts['spreads']['outcomes'][0].get('price', 0)
-                    # Chân kinh bẫy chấp
                     is_trap_hc = (h_r and a_r and abs(h_r - a_r) >= 5 and abs(l) <= 0.5)
-                    money_hc = "TIỀN GIẢM (ÉP DƯỚI)" if p > 2.05 else "TIỀN TĂNG (ÉP TRÊN)" if p < 1.85 else "ỔN ĐỊNH"
+                    money_hc = "GIẢM (ÉP DƯỚI)" if p > 2.05 else "TĂNG (ÉP TRÊN)" if p < 1.85 else "ỔN ĐỊNH"
                     
                     if is_trap_hc or money_hc != "ỔN ĐỊNH":
-                        # Lệnh Vả Mạnh theo Chân Kinh Idol
                         pick_hc = "🚨 VẢ MẠNH DƯỚI" if is_trap_hc and p > 2.05 else "THEO DÕI CHẤP"
                         save_log(f"{home} vs {away}", "BẪY CHẤP", pick_hc, abs(l))
                         send_tele(f"🏟️ *NHẬN ĐỊNH KÈO CHẤP*\n⏰ {st_vn.strftime('%H:%M')}\n⚽ {home} vs {away}\n📈 Rank: {h_r} vs {a_r}\n🎯 Chấp: {l} | Odd: {p}\n🪤 Bẫy: {'DỤ TRÊN' if is_trap_hc else 'None'}\n💰 Tiền: {money_hc}\n👉 Lệnh: *{pick_hc}*")
 
-                # --- KHỐI 2: CHUYÊN BIỆT TÀI XỈU ---
+                # --- LUỒNG TÀI XỈU ---
                 if 'totals' in mkts:
                     tl = mkts['totals']['outcomes'][0].get('point', 0)
                     tp = mkts['totals']['outcomes'][0].get('price', 0)
-                    # Chân kinh bẫy Tài Xỉu
-                    is_trap_tx = (tl < (avg_g - 0.45)) # Dụ Tài
+                    is_trap_tx = (tl < (avg_g - 0.45))
                     money_tx = "VẢ TÀI" if tp < 1.85 else "VẢ XỈU" if tp > 2.05 else "THEO DÕI TX"
                     
                     if is_trap_tx or money_tx != "THEO DÕI TX":
@@ -128,7 +123,7 @@ def main():
                         save_log(f"{home} vs {away}", "BẪY TX", pick_tx, tl)
                         send_tele(f"⚽ *NHẬN ĐỊNH TÀI XỈU*\n⏰ {st_vn.strftime('%H:%M')}\n🏟️ {home} vs {away}\n📜 Sử: {avg_g:.1f} bàn\n🎯 Mốc: {tl} | Odd: {tp}\n🪤 Bẫy: {'DỤ TÀI' if is_trap_tx else 'None'}\n👉 Lệnh: *{pick_tx}*")
 
-    send_tele(f"✅ Đã quét xong phiên {now_vn.strftime('%H:%M')}. Shark đang tuần tra cả Chấp & TX! 🦈")
+    send_tele(f"✅ Phiên {now_vn.strftime('%H:%M')} hoàn tất. Log đã được ghi vào {DB_FILE}. 🦈")
 
 if __name__ == "__main__":
     main()
