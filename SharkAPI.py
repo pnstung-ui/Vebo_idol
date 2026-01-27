@@ -2,75 +2,78 @@ import pandas as pd
 import requests
 import io
 import os
+import sys
 from datetime import datetime, timedelta
 
-# --- CONFIG ---
+# --- CẤU HÌNH ---
 API_KEY = "f45bf78df6e60adb0d2d6d1d9e0f7c1c"
 TELE_TOKEN = "8477918500:AAFCazBYVwDq6iJGlLfVZ-UTCK3B5OFO7XW"
 TELE_CHAT_ID = "957306386"
 
 def send_tele(msg):
+    print(f"--- GỬI TELEGRAM: {msg[:50]}... ---")
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
-    try: requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
-    except: pass
+    try:
+        r = requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
+        print(f"Kết quả gửi: {r.status_code} - {r.text}")
+        return r.status_code == 200
+    except Exception as e:
+        print(f"Lỗi kết nối Tele: {e}")
+        return False
 
 def main():
     now_vn = datetime.now() + timedelta(hours=7)
-    send_tele(f"📡 *SHARK REAL-TIME V26*\n🔄 Đang phân tích Odd động từ API...")
+    
+    # 1. TEST THÔNG NÒNG NGAY LẬP TỨC
+    print(f"Bắt đầu chạy Shark V27 lúc: {now_vn}")
+    send_tele(f"🚨 *SHARK V27 CHÀO IDOL!*\n⏱ Time: {now_vn.strftime('%H:%M:%S')}\n🚀 Radar Odd động đang bắt đầu quét...")
 
-    # 1. LẤY DỮ LIỆU TỪ API (Lấy nhiều nhà cái để so sánh)
+    # 2. LẤY ODD ĐỘNG TỪ API
     api_url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
     params = {'apiKey': API_KEY, 'regions': 'eu', 'markets': 'totals', 'oddsFormat': 'decimal'}
-    data = requests.get(api_url, params=params).json()
+    
+    try:
+        print("Đang gọi API Odds...")
+        response = requests.get(api_url, params=params)
+        data = response.json()
+        print(f"Tìm thấy {len(data)} trận đấu từ API.")
+    except Exception as e:
+        print(f"Lỗi API: {e}")
+        return
 
     for m in data:
         home, away = m['home_team'], m['away_team']
-        st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
+        
+        # Lấy danh sách Odd của tất cả nhà cái để tính trung bình (Opening động)
+        all_over_odds = []
+        for bm in m.get('bookmakers', []):
+            for mkt in bm['markets']:
+                if mkt['key'] == 'totals':
+                    all_over_odds.append(mkt['outcomes'][0]['price'])
 
-        if now_vn < st_vn < now_vn + timedelta(hours=15):
-            # 2. TÍNH TOÁN ODD ĐỘNG (Không dùng số chết nữa)
-            all_over_odds = []
-            for bm in m['bookmakers']:
-                for mkt in bm['markets']:
-                    if mkt['key'] == 'totals':
-                        all_over_odds.append(mkt['outcomes'][0]['price']) # Lấy giá Tài (Over)
+        if len(all_over_odds) < 2: continue
 
-            if len(all_over_odds) < 2: continue # Không đủ dữ liệu so sánh thì bỏ qua
+        avg_market = sum(all_over_odds) / len(all_over_odds) # Odd trung bình (Gốc)
+        live_odd = all_over_odds[0] # Odd nhà cái chính (Live)
+        delta = avg_market - live_odd # Độ lệch
 
-            avg_market_over = sum(all_over_odds) / len(all_over_odds) # Trung bình thị trường (Opening giả lập)
-            live_over = all_over_odds[0] # Lấy nhà cái đầu tiên làm Live (ví dụ Bet365/Pinnacle)
-            
-            # 3. BIẾN THIÊN (Delta) - TIỀN TĂNG/GIẢM
-            # Delta dương (>0): Live thấp hơn trung bình -> Tiền đang đổ vào, ép Odd giảm.
-            # Delta âm (<0): Live cao hơn trung bình -> Nhà cái đang thả, dụ người chơi.
-            delta = avg_market_over - live_over
-            
-            action = "---"
-            # ÁP DỤNG NGUYÊN TẮC IDOL VỚI ODD ĐỘNG:
-            
-            # BÀI 1: ODD GIỮ NGUYÊN, TIỀN TĂNG THÌ XỈU (Delta rất nhỏ nhưng vẫn có xu hướng ép)
-            if abs(delta) < 0.02 and delta > 0: 
-                action = "❄️ VẢ XỈU (Tiền tăng - Odd ngang)"
-            
-            # BÀI 2: ODD GIỮ NGUYÊN, TIỀN GIẢM THÌ TÀI
-            elif abs(delta) < 0.02 and delta < 0:
-                action = "🔥 VẢ TÀI (Tiền giảm - Odd ngang)"
+        action = "---"
+        # NGUYÊN TẮC IDOL: ODD GIỮ NGUYÊN - TIỀN TĂNG/GIẢM
+        # Nới lỏng mốc 0.01 để thông nòng
+        if abs(delta) < 0.02:
+            if delta > 0.005: action = "❄️ VẢ XỈU (Tiền tăng - Odd ngang)"
+            elif delta < -0.005: action = "🔥 VẢ TÀI (Tiền giảm - Odd ngang)"
+        
+        # ODD DỊCH CHUYỂN MẠNH
+        elif delta > 0.04: action = "❄️ VẢ XỈU (Odd sập mạnh)"
+        elif delta < -0.04: action = "🔥 VẢ TÀI (Odd tăng mạnh)"
 
-            # BÀI 3: ODD GIẢM THÌ XỈU (Live thấp hơn hẳn trung bình)
-            elif delta > 0.05:
-                action = "❄️ VẢ XỈU (Odd giảm mạnh)"
+        if action != "---":
+            msg = (f"🆔 *SHARK_V27*\n⚽ {home} vs {away}\n🎯 Lệnh: *{action}*\n"
+                   f"📊 Mốc gốc (Avg): {avg_market:.2f}\n📈 Live hiện tại: {live_odd:.2f}")
+            send_tele(msg)
 
-            # BÀI 4: ODD TĂNG THÌ TÀI (Live cao hơn hẳn trung bình)
-            elif delta < -0.05:
-                action = "🔥 VẢ TÀI (Odd tăng mạnh)"
-
-            if action != "---":
-                msg = (f"⚽ *{home} vs {away}*\n"
-                       f"🎯 Lệnh: *{action}*\n"
-                       f"📊 Opening (Avg): {avg_market_over:.2f}\n"
-                       f"📈 Live: {live_over:.2f}\n"
-                       f"📉 Biến động: {'+' if delta>0 else ''}{delta:.2f}")
-                send_tele(msg)
+    print("Chu kỳ quét kết thúc.")
 
 if __name__ == "__main__":
     main()
