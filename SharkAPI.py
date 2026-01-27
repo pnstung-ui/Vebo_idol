@@ -14,18 +14,9 @@ def send_tele(msg):
     except: pass
 
 def get_real_data_and_rankings():
-    # Đã bổ sung hạng 1 & 2 của các giải lớn: Hà Lan, Đức, Pháp, Ý, Tây Ban Nha, Anh
-    sources = [
-        "E0", "E1", "E2", "E3",  # Anh: Premier, Championship, L1, L2
-        "D1", "D2",              # Đức: Bundesliga 1 & 2
-        "SP1", "SP2",            # Tây Ban Nha: La Liga 1 & 2
-        "I1", "I2",              # Ý: Serie A & B
-        "F1", "F2",              # Pháp: Ligue 1 & 2
-        "N1", "B1", "P1", "T1",  # Hà Lan, Bỉ, Bồ Đào Nha, Thổ Nhĩ Kỳ
-        "G1", "SC0",             # Hy Lạp, Scotland
-        "BRA.csv", "ARG.csv",    # Nam Mỹ
-        "NOR.csv", "DEN.csv", "SWE.csv" # Bắc Âu
-    ]
+    # Full nguồn giải hạng 1-2 toàn cầu
+    sources = ["E0", "E1", "E2", "E3", "D1", "D2", "SP1", "SP2", "I1", "I2", "F1", "F2", 
+               "N1", "N2", "B1", "B2", "P1", "T1", "G1", "BRA.csv", "ARG.csv", "NOR.csv", "DEN.csv"]
     all_dfs = []
     for s in sources:
         url = f"https://www.football-data.co.uk/new/{s}" if ".csv" in s else f"https://www.football-data.co.uk/mmz4281/2526/{s}.csv"
@@ -33,23 +24,18 @@ def get_real_data_and_rankings():
             r = requests.get(url, timeout=10)
             if r.status_code == 200:
                 df = pd.read_csv(io.StringIO(r.text))
-                cols = ['HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'FTR']
-                all_dfs.append(df[[c for c in cols if c in df.columns]])
+                all_dfs.append(df[['HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'FTR']])
         except: continue
+    full_db = pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
     
-    if not all_dfs: return pd.DataFrame(), {}
-    full_db = pd.concat(all_dfs, ignore_index=True)
-    
-    # Tính Standings cho tất cả các giải đã nạp
+    # Tính bảng xếp hạng (Standings)
     teams = pd.concat([full_db['HomeTeam'], full_db['AwayTeam']]).unique()
     table = {team: 0 for team in teams if pd.notna(team)}
     for _, row in full_db.iterrows():
         try:
             if row['FTR'] == 'H': table[row['HomeTeam']] += 3
             elif row['FTR'] == 'A': table[row['AwayTeam']] += 3
-            else: 
-                table[row['HomeTeam']] += 1
-                table[row['AwayTeam']] += 1
+            else: table[row['HomeTeam']] += 1; table[row['AwayTeam']] += 1
         except: continue
     rankings = {team: r + 1 for r, (team, pts) in enumerate(sorted(table.items(), key=lambda x: x[1], reverse=True))}
     return full_db, rankings
@@ -57,11 +43,11 @@ def get_real_data_and_rankings():
 def main():
     now_vn = datetime.now() + timedelta(hours=7)
     next_run = now_vn + timedelta(hours=1)
-    send_tele(f"🛰️ *SHARK V43 - FULL DIVISIONS ONLINE*\n🔎 Quét hạng 1-2 toàn hệ thống...\n⏰ Bắt đầu: {now_vn.strftime('%H:%M')}")
+    send_tele(f"🛰️ *SHARK V46 - RADAR BẪY CHẤP (MỐC 5 BẬC)*\n🔎 Đang săn tìm kèo thối hạng 1-2...\n⏰ Giờ quét: {now_vn.strftime('%H:%M')}")
 
     db, rankings = get_real_data_and_rankings()
     api_url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
-    params = {'apiKey': API_KEY, 'regions': 'eu', 'markets': 'totals,spreads'}
+    params = {'apiKey': API_KEY, 'regions': 'eu', 'markets': 'spreads,totals'}
     try: data = requests.get(api_url, params=params).json()
     except: return
 
@@ -70,55 +56,53 @@ def main():
         home, away = m['home_team'], m['away_team']
         st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
         
+        # Quét khung giờ vàng 12 tiếng
         if now_vn < st_vn < now_vn + timedelta(hours=12):
             match_count += 1
-            h2h = db[(db['HomeTeam'].str[:3] == home[:3]) | (db['AwayTeam'].str[:3] == away[:3])]
-            avg_g_h2h = h2h['FTHG'].add(h2h['FTAG']).mean() if not h2h.empty else 2.5
+            # Lấy hạng (Mapping 3 ký tự đầu)
             h_rank = rankings.get(next((k for k in rankings if k[:3] == home[:3]), None), 15)
             a_rank = rankings.get(next((k for k in rankings if k[:3] == away[:3]), None), 15)
             rank_diff = abs(h_rank - a_rank)
+            
+            # Lịch sử đối đầu
+            h2h = db[((db['HomeTeam'].str[:3] == home[:3]) & (db['AwayTeam'].str[:3] == away[:3])) | 
+                     ((db['HomeTeam'].str[:3] == away[:3]) & (db['AwayTeam'].str[:3] == home[:3]))]
+            h2h_info = "N/A" if h2h.empty else f"{len(h2h)} trận | {h2h['FTHG'].add(h2h['FTAG']).mean():.1f} bàn"
 
             for bm in m.get('bookmakers', [])[:1]:
                 mkts = {mk['key']: mk for mk in bm['markets']}
                 
-                # --- PHÂN TÍCH TÀI XỈU ---
-                if 'totals' in mkts:
-                    line = mkts['totals'].get('point')
-                    outcomes = mkts['totals'].get('outcomes', [])
-                    if line and outcomes:
-                        live_p = outcomes[0]['price']
-                        all_prices = [mk['outcomes'][0]['price'] for b in m['bookmakers'] for mk in b['markets'] if mk['key']=='totals']
-                        avg_p_world = sum(all_prices)/len(all_prices) if all_prices else live_p
-                        
-                        tx_trap = "TAI" if line < (avg_g_h2h - 0.45) else "XIU" if line > (avg_g_h2h + 0.45) else "NONE"
-                        tx_money = "TAI" if live_p < (avg_p_world - 0.04) else "XIU" if live_p > (avg_p_world + 0.04) else "NONE"
-                        
-                        report_tx = f"⚽ *{home} vs {away}*\n⏰ {st_vn.strftime('%H:%M')}\n📊 Sử: {avg_g_h2h:.1f} | Mốc: {line}\n🪤 Bẫy: {tx_trap} | 💰 Tiền: {tx_money}"
-                        
-                        if tx_trap == tx_money and tx_trap != "NONE":
-                            send_tele(f"🚨 *VẢ MẠNH {tx_trap}* 🔥\n{report_tx}")
-                        else:
-                            send_tele(f"📋 *BÁO CÁO TX:* \n{report_tx}")
-
-                # --- PHÂN TÍCH CHẤP ---
                 if 'spreads' in mkts:
                     line_h = mkts['spreads'].get('point')
-                    if line_h is not None:
-                        live_h_p = mkts['spreads']['outcomes'][0]['price']
-                        h_trap = "DU_TREN" if (rank_diff >= 9 and 0 < abs(line_h) <= 0.5) else "NONE"
-                        h_money = "DUOI" if live_h_p > 2.05 else "TREN" if live_h_p < 1.75 else "NONE"
-                        
-                        status_h = f"🚩 *CHẤP: {home} vs {away}*\n📉 Rank: {h_rank} vs {a_rank} ({rank_diff} bậc)\n🪤 Bẫy: {h_trap} | 💰 Tiền: {h_money} | Mốc: {line_h}"
-                        
-                        if rank_diff >= 9 and h_trap == "DU_TREN" and h_money == "DUOI":
-                            send_tele(f"🚨 *VẢ MẠNH DƯỚI* ❄️\n{status_h}")
-                        else:
-                            send_tele(f"📋 *BÁO CÁO CHẤP:* \n{status_h}")
+                    if line_h is None: continue
+                    live_h_p = mkts['spreads']['outcomes'][0]['price'] # Giá cửa đầu tiên (thường là Home)
+                    
+                    # --- CHÂN KINH DỤ KÈO CHẤP ---
+                    h_trap = "NONE"
+                    # Nếu chênh lệch >= 5 bậc mà chấp thấp (<= 0.5) => Kèo thối Dụ Trên
+                    # Hoặc đội hạng cao hơn lại được chấp => Dụ Trên cực nặng
+                    if rank_diff >= 5 and abs(line_h) <= 0.5:
+                        h_trap = "DỤ NẰM TRÊN (Kèo Thối)"
+                    
+                    # --- CHÂN KINH DÒNG TIỀN (MONEY FLOW) ---
+                    # Nguyên tắc: Odd giữ nguyên, tiền tăng (giá giảm) thì theo hướng đó. 
+                    # Ở đây ta so sánh giá Live với mốc chuẩn 1.90
+                    money_flow = "ÉP TRÊN" if live_h_p < 1.80 else "ÉP DƯỚI" if live_h_p > 2.10 else "ỔN ĐỊNH"
+                    
+                    report = (f"⚽ *{home} vs {away}*\n"
+                              f"📈 Rank: {h_rank} vs {a_rank} (Lệch {rank_diff} bậc)\n"
+                              f"📜 Sử: {h2h_info}\n"
+                              f"🎯 Chấp: {line_h} | Odd: {live_h_p}\n"
+                              f"🪤 Bẫy: {h_trap}\n"
+                              f"💰 Tiền: {money_flow}")
 
-    footer = (f"✅ *PHIÊN QUÉT HOÀN TẤT*\n"
-              f"📊 Đã soi xong {match_count} trận hạng 1&2.\n"
-              f"🔄 Tự động quét lại lúc: *{next_run.strftime('%H:%M')}*.")
-    send_tele(footer)
+                    # RA LỆNH VẢ MẠNH: Khi Dụ Trên mà tiền lại ép Dưới (Phá bẫy)
+                    if h_trap != "NONE" and money_flow == "ÉP DƯỚI":
+                        send_tele(f"🚨 *VẢ MẠNH CỬA DƯỚI* ❄️\n{report}")
+                    else:
+                        send_tele(f"📋 *BÁO CÁO DỤ KÈO:* \n{report}")
+
+    send_tele(f"✅ *PHIÊN QUÉT HOÀN TẤT*\n📊 Đã soi {match_count} trận.\n🔄 Tự động quét lại lúc: *{next_run.strftime('%H:%M')}*.")
 
 if __name__ == "__main__":
     main()
