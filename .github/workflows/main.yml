@@ -28,10 +28,10 @@ jobs:
         env:
           PYTHONUNBUFFERED: 1
 
-      - name: Save History
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add shark_history_log.csv || exit 0
-          git commit -m "Update Shark History [skip ci]" || exit 0
-          git push
+      - name: Commit and push changes
+      run: |
+        git config --global user.name "pnstung-ui"
+        git config --global user.email "your-email@example.com"
+        git add shark_history_log.csv
+        git commit -m "Update Shark History [skip ci]" || exit 0
+        git push
