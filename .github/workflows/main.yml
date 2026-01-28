@@ -2,9 +2,8 @@ name: Shark AI Automated
 
 on:
   schedule:
-    - cron: '*/30 * * * *' # Chạy mỗi 30 phút một lần
-  workflow_dispatch: # Cho phép Idol bấm nút "Run workflow" để chạy tay bất cứ lúc nào
-
+    - cron: '0 13-19 * * *'  # Chạy mỗi tiếng một lần từ 20h đến 02h sáng (Giờ VN)
+  workflow_dispatch:        # Giữ nút này để Idol bấm quét tay ban ngày
 jobs:
   build:
     runs-on: ubuntu-latest
