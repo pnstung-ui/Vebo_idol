@@ -31,9 +31,9 @@ jobs:
 
       # Bước 5: QUAN TRỌNG NHẤT - Đẩy file History ngược lại GitHub để lưu trữ
       - name: Commit and push changes
-        run: |
-          git config --global user.name "Shark-Bot-Automated"
-          git config --global user.email "pnstung@gmail.com"
-          git add shark_history_log.csv
-          git commit -m "Shark update history [skip ci]" || exit 0
-          git push
+      run: |
+        git config --global user.name "Shark-Bot-Automated"
+        git config --global user.email "pnstung@gmail.com"
+        git add shark_history_log.csv odds_tracker.csv  # <--- THÊM FILE NÀY VÀO ĐÂY
+        git commit -m "Shark update history and memory [skip ci]" || exit 0
+        git push
