@@ -133,8 +133,8 @@ def main():
                 if 'totals' in mkts:
                     tl = mkts['totals']['outcomes'][0].get('point', 0)
                     tp = mkts['totals']['outcomes'][0].get('price', 0)
-                    is_du_tai = (avg_g >= 2.5 and tl <= 2.25)
-                    is_du_xiu = (avg_g <= 2.0 and tl >= 2.5)
+                    is_du_tai = (avg_g >= 2.75 and tl <= 2.25) # Sử cao mà Kèo thấp -> Bẫy Tài
+                    is_du_xiu = (avg_g <= 2.0 and tl >= 2.75)  # Sử thấp mà Kèo cao -> Bẫy Xỉu
                     trap_name = "DỤ TÀI" if is_du_tai else "DỤ XỈU" if is_du_xiu else "None"
                     
                     pick_tx = "THEO DÕI TX"
