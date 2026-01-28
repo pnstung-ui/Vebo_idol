@@ -16,34 +16,60 @@ def send_tele(msg):
     except: pass
 
 def audit_results():
+    """Hàm kiểm tra kết quả Húp/Gãy và báo cáo tỷ lệ thắng"""
     if not os.path.isfile(DB_FILE): return
     try:
         df = pd.read_csv(DB_FILE)
-        waiting = df[df['Status'] == 'WAITING']
-        if waiting.empty: return
-        scores = requests.get(f"https://api.the-odds-api.com/v4/sports/soccer/scores/?daysFrom=1&apiKey={API_KEY}").json()
-        report = "📝 *ĐỐI CHIẾU KẾT QUẢ*\n\n"
-        has_up = False
-        for s in scores:
-            if s.get('completed'):
-                m_name = f"{s['home_team']} vs {s['away_team']}"
-                idx = df[df['Match'] == m_name].index
-                if not idx.empty and df.loc[idx[0], 'Status'] == 'WAITING':
-                    h_s, a_s = int(s['scores'][0]['score']), int(s['scores'][1]['score'])
-                    pick, line = df.loc[idx[0], 'Pick'], float(df.loc[idx[0], 'Line'])
+        waiting_idx = df[df['Status'] == 'WAITING'].index
+        if len(waiting_idx) == 0: return
+        
+        # Lấy score từ API
+        r = requests.get(f"https://api.the-odds-api.com/v4/sports/soccer/scores/?daysFrom=1&apiKey={API_KEY}")
+        if r.status_code != 200: return
+        scores = r.json()
+        
+        report = "📝 *TỔNG KẾT KẾT QUẢ PHIÊN TRƯỚC*\n\n"
+        hup, gay = 0, 0
+        has_update = False
+
+        for idx in waiting_idx:
+            m_name = df.loc[idx, 'Match']
+            # So khớp mềm 5 ký tự đầu để tránh lệch tên nhà cái/kết quả
+            s_match = next((s for s in scores if s.get('completed') and 
+                          (m_name.split(' vs ')[0][:5].lower() in s['home_team'].lower() or
+                           m_name.split(' vs ')[1][:5].lower() in s['away_team'].lower())), None)
+            
+            if s_match:
+                try:
+                    h_s = int(s_match['scores'][0]['score'])
+                    a_s = int(s_match['scores'][1]['score'])
+                    pick, line = df.loc[idx, 'Pick'], float(df.loc[idx, 'Line'])
+                    
+                    total = h_s + a_s
                     win = False
-                    if "XỈU" in pick and (h_s+a_s) < line: win = True
-                    elif "TÀI" in pick and (h_s+a_s) > line: win = True
+                    
+                    # Xác định Húp/Gãy theo Pick
+                    if "XỈU" in pick and total < line: win = True
+                    elif "TÀI" in pick and total > line: win = True
                     elif "DƯỚI" in pick and (a_s + line > h_s): win = True
                     elif "TRÊN" in pick and (h_s - line > a_s): win = True
-                    res = "✅ ĐÚNG" if win else "❌ SAI"
-                    df.loc[idx[0], 'Status'] = res
-                    report += f"🏟️ {m_name}: {h_s}-{a_s} -> *{res}*\n"
-                    has_up = True
-        if has_up:
+                    
+                    res = "✅ HÚP" if win else "❌ GÃY"
+                    if win: hup += 1 
+                    else: gay += 1
+                    
+                    df.loc[idx, 'Status'] = res
+                    report += f"🏟️ {m_name}\n🎯 {pick} | FT: {h_s}-{a_s} -> *{res}*\n\n"
+                    has_update = True
+                except: continue
+
+        if has_update:
+            win_rate = (hup / (hup + gay)) * 100 if (hup + gay) > 0 else 0
+            report += f"📊 *THỐNG KÊ:* Húp {hup} - Gãy {gay}\n🔥 Tỷ lệ rực rỡ: {win_rate:.1f}%"
             df.to_csv(DB_FILE, index=False)
             send_tele(report)
-    except: pass
+    except Exception as e:
+        print(f"Lỗi Audit: {e}")
 
 def save_log(match, trap, pick, line):
     new_entry = pd.DataFrame([{'Match': match, 'Trap': trap, 'Pick': pick, 'Line': line, 'Status': 'WAITING'}])
@@ -103,28 +129,20 @@ def main():
                         save_log(f"{home} vs {away}", "BẪY CHẤP", pick_hc, abs(l))
                         send_tele(f"🏟️ *NHẬN ĐỊNH KÈO CHẤP*\n⏰ {st_vn.strftime('%H:%M')}\n⚽ {home} vs {away}\n📈 Rank: {h_r} vs {a_r}\n🎯 Chấp: {l} | Odd: {p}\n🪤 Bẫy: {'DỤ TRÊN' if is_trap_hc else 'None'}\n👉 Lệnh: *{pick_hc}*")
 
-                # --- PHÂN TÍCH TÀI XỈU (SỬA LỖI LỆNH) ---
+                # --- PHÂN TÍCH TÀI XỈU ---
                 if 'totals' in mkts:
                     tl = mkts['totals']['outcomes'][0].get('point', 0)
                     tp = mkts['totals']['outcomes'][0].get('price', 0)
-                    
-                    # Logic Trap: Lịch sử nhiều bàn (Sử >= 2.5) mà mốc thấp (tl <= 2.25) -> DỤ TÀI
                     is_du_tai = (avg_g >= 2.5 and tl <= 2.25)
-                    # Logic Trap: Lịch sử ít bàn (Sử <= 2.0) mà mốc cao (tl >= 2.5) -> DỤ XỈU
                     is_du_xiu = (avg_g <= 2.0 and tl >= 2.5)
-                    
                     trap_name = "DỤ TÀI" if is_du_tai else "DỤ XỈU" if is_du_xiu else "None"
                     
-                    # QUY TẮC LỆNH CỦA IDOL
                     pick_tx = "THEO DÕI TX"
                     if is_du_tai:
-                        # Gặp bẫy Dụ Tài -> Ưu tiên Xỉu. Nếu Odd tăng (tiền thoát) -> Vả mạnh Xỉu.
                         pick_tx = "🚨 VẢ MẠNH XỈU" if tp > 2.05 else "THEO DÕI XỈU"
                     elif is_du_xiu:
-                        # Gặp bẫy Dụ Xỉu -> Ưu tiên Tài. Nếu Odd giảm (tiền vào) -> Vả mạnh Tài.
                         pick_tx = "🚨 VẢ MẠNH TÀI" if tp < 1.85 else "THEO DÕI TÀI"
                     else:
-                        # Không bẫy thì đánh theo dòng tiền thuần túy
                         if tp < 1.85: pick_tx = "VẢ TÀI"
                         elif tp > 2.05: pick_tx = "VẢ XỈU"
                     
