@@ -2,7 +2,7 @@ name: Shark AI Automated
 
 on:
   schedule:
-    - cron: '0 13-19 * * *'  # Chạy mỗi tiếng từ 20h đến 02h sáng (Giờ VN)
+    - cron: '0 13-20 * * *'  # Chạy mỗi tiếng từ 20h đến 02h sáng (Giờ VN)
   workflow_dispatch:        # Nút bấm quét tay thủ công
 
 jobs:
