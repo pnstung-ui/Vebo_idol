@@ -34,7 +34,7 @@ jobs:
       - name: Commit and push changes
         run: |
           git config --global user.name "Shark-Bot-Automated"
-          git config --global user.email "bot@sharkai.com"
+          git config --global user.email "pnstung@gmail.com"
           git add shark_history_log.csv
           git commit -m "Shark update history [skip ci]" || exit 0
           git push
