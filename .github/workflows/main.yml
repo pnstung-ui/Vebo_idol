@@ -2,8 +2,9 @@ name: Shark AI Automated
 
 on:
   schedule:
-    - cron: '0 13-19 * * *'  # 20h - 02h VN
-  workflow_dispatch:        # Nút bấm Manual
+    # 01:00 UTC = 08:00 VN | 13:00-20:00 UTC = 20:00-03:00 VN
+    - cron: '0 1,13,14,15,16,17,18,19,20 * * *' 
+  workflow_dispatch:
 
 jobs:
   build:
