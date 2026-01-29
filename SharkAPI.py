@@ -4,9 +4,7 @@ import io
 import os
 from datetime import datetime, timedelta
 
-# ==========================================
-# 1. CẤU HÌNH HỆ THỐNG
-# ==========================================
+# --- CẤU HÌNH ---
 LIST_KEYS = ["f45bf78df6e60adb0d2d6d1d9e0f7c1c", "43a45057d6df74eab8e05251ca88993c"]
 TELE_TOKEN = "7981423606:AAFvJ5Xin_L62k-q0lKY8BPpoOa4PSoE7Ys"
 TELE_CHAT_ID = "957306386"
@@ -17,7 +15,7 @@ def get_active_key():
     for key in LIST_KEYS:
         try:
             r = requests.get(f"https://api.the-odds-api.com/v4/sports/?apiKey={key}", timeout=10)
-            if r.status_code == 200 and int(r.headers.get('x-requests-remaining', 0)) > 0: return key
+            if r.status_code == 200: return key
         except: continue
     return LIST_KEYS[0]
 
@@ -28,9 +26,39 @@ def send_tele(msg):
     try: requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
     except: pass
 
-# ==========================================
-# 2. XỬ LÝ BIẾN ĐỘNG (ODD MOVEMENT)
-# ==========================================
+# --- HÀM AUDIT KẾT QUẢ (CHẠY BUỔI SÁNG) ---
+def audit_results(db_results):
+    if not os.path.isfile(DB_FILE) or db_results.empty: return
+    
+    try: history = pd.read_csv(DB_FILE, names=['Match', 'Trap', 'Pick', 'Line', 'Status'])
+    except: return
+
+    updated = False
+    summary = "📊 *TỔNG KẾT KÈO ĐÊM QUA*\n\n"
+
+    for idx, row in history.iterrows():
+        if row['Status'] == 'WAITING':
+            teams = row['Match'].split(' vs ')
+            res = db_results[((db_results['HomeTeam'] == teams[0]) & (db_results['AwayTeam'] == teams[1]))]
+            
+            if not res.empty:
+                hg, ag = res.iloc[0]['FTHG'], res.iloc[0]['FTAG']
+                total = hg + ag
+                line = float(row['Line'])
+                pick, status = row['Pick'], "HÒA"
+                
+                # Logic Tài Xỉu (Cho đơn giản, Idol có thể thêm logic Chấp sau)
+                if "TÀI" in pick: status = "✅ HÚP" if total > line else "❌ GÃY" if total < line else "➖ HÒA"
+                elif "XỈU" in pick: status = "✅ HÚP" if total < line else "❌ GÃY" if total > line else "➖ HÒA"
+                
+                history.at[idx, 'Status'] = status
+                summary += f"🏟️ {row['Match']}\n🎯 {pick} {line} | KQ: {hg}-{ag} -> *{status}*\n\n"
+                updated = True
+
+    if updated:
+        history.to_csv(DB_FILE, index=False, header=False)
+        send_tele(summary)
+
 def track_odds_movement(match_id, current_odd):
     if not os.path.isfile(ODDS_TRACKER):
         df = pd.DataFrame(columns=['match_id', 'old_odd', 'last_update'])
@@ -40,55 +68,45 @@ def track_odds_movement(match_id, current_odd):
 
     move, old_val = "Scan đầu", "N/A"
     match_row = df[df['match_id'] == match_id]
-    
     if not match_row.empty:
         old_val = float(match_row.iloc[0]['old_odd'])
-        if current_odd < old_val: move = "GIẢM 📉" 
-        elif current_odd > old_val: move = "TĂNG 📈"
-        else: move = "ỔN ĐỊNH ➖"
+        move = "GIẢM 📉" if current_odd < old_val else "TĂNG 📈" if current_odd > old_val else "ỔN ĐỊNH ➖"
         df.loc[df['match_id'] == match_id, ['old_odd', 'last_update']] = [current_odd, datetime.now()]
     else:
-        new_row = pd.DataFrame([{'match_id': match_id, 'old_odd': current_odd, 'last_update': datetime.now()}])
-        df = pd.concat([df, new_row], ignore_index=True)
+        new = pd.DataFrame([{'match_id': match_id, 'old_odd': current_odd, 'last_update': datetime.now()}])
+        df = pd.concat([df, new], ignore_index=True)
     
     df.to_csv(ODDS_TRACKER, index=False)
     return move, old_val
 
-# ==========================================
-# 3. LẤY DỮ LIỆU LỊCH SỬ (H2H)
-# ==========================================
 def get_h2h_db():
     sources = ["E0", "E1", "SP1", "SP2", "I1", "I2", "D1", "D2", "F1", "F2", "N1", "B1"]
     all_dfs = []
     for s in sources:
-        url = f"https://www.football-data.co.uk/mmz4281/2526/{s}.csv"
         try:
-            r = requests.get(url, timeout=10)
+            r = requests.get(f"https://www.football-data.co.uk/mmz4281/2526/{s}.csv", timeout=10)
             if r.status_code == 200:
-                t_df = pd.read_csv(io.StringIO(r.text))
-                if all(c in t_df.columns for c in ['HomeTeam', 'AwayTeam', 'FTHG', 'FTAG']):
-                    all_dfs.append(t_df[['HomeTeam', 'AwayTeam', 'FTHG', 'FTAG']])
+                all_dfs.append(pd.read_csv(io.StringIO(r.text)))
         except: continue
     return pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
 
-# ==========================================
-# 4. CHƯƠNG TRÌNH CHÍNH
-# ==========================================
 def main():
     now_vn = datetime.now() + timedelta(hours=7)
-    
-    # MỞ KHÓA MANUAL: Kiểm tra nếu bấm nút trên GitHub hoặc chạy Pydroid
     is_manual = os.getenv('GITHUB_EVENT_NAME') == 'workflow_dispatch'
-    is_android = "ANDROID_ROOT" in os.environ
-
-    if not (is_manual or is_android):
-        if not (20 <= now_vn.hour or now_vn.hour < 2):
-            print(f"💤 Đang ngoài giờ săn ({now_vn.hour}h). Nghỉ để tiết kiệm API.")
-            return
-
+    
     db = get_h2h_db()
+    
+    # 1. NẾU LÀ 8H SÁNG: CHỈ AUDIT KẾT QUẢ
+    if 7 <= now_vn.hour <= 9:
+        audit_results(db)
+        if not is_manual: return # Sáng chỉ audit xong nghỉ
+
+    # 2. CHẾ ĐỘ QUÉT KÈO (20H - 03H)
+    if not (20 <= now_vn.hour or now_vn.hour < 3) and not is_manual:
+        return
+
     try:
-        data = requests.get(f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={API_KEY}&regions=eu&markets=totals").json()
+        data = requests.get(f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={API_KEY}&regions=eu&markets=h2h,totals").json()
     except: return
 
     for m in data:
@@ -96,38 +114,34 @@ def main():
         st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
         
         if now_vn < st_vn < now_vn + timedelta(hours=12):
+            # Check sử bẫy
             h2h = db[((db['HomeTeam'] == home) & (db['AwayTeam'] == away)) | ((db['HomeTeam'] == away) & (db['AwayTeam'] == home))]
             avg_g = h2h['FTHG'].add(h2h['FTAG']).head(4).mean() if not h2h.empty else 2.5
-            
+
             for bm in m.get('bookmakers', [])[:1]:
-                mkt = next((mk for mk in bm['markets'] if mk['key'] == 'totals'), None)
-                if mkt:
-                    tl, tp = mkt['outcomes'][0]['point'], mkt['outcomes'][0]['price']
-                    match_id = f"{home}_{away}_{tl}"
-                    move, old_tp = track_odds_movement(match_id, tp)
-                    
-                    # Logic Bẫy (Trap)
-                    is_du_tai = (avg_g >= 2.75 and tl <= 2.25)
-                    is_du_xiu = (avg_g <= 2.0 and tl >= 2.5)
-                    trap = "DỤ TÀI" if is_du_tai else "DỤ XỈU" if is_du_xiu else "Không bẫy"
+                for mkt in bm['markets']:
+                    for out in mkt['outcomes']:
+                        tl = out.get('point', 0)
+                        tp = out['price']
+                        match_id = f"{home}_{away}_{mkt['key']}_{out['name']}_{tl}"
+                        move, old_tp = track_odds_movement(match_id, tp)
+                        
+                        # Logic Trap & Vả
+                        is_du_tai = (mkt['key'] == 'totals' and avg_g >= 2.75 and tl <= 2.25)
+                        is_du_xiu = (mkt['key'] == 'totals' and avg_g <= 2.0 and tl >= 2.5)
+                        
+                        cmd = ""
+                        if is_du_tai and "TĂNG" in move: cmd = "🚨 VẢ MẠNH XỈU"
+                        elif is_du_xiu and "GIẢM" in move: cmd = "🚨 VẢ MẠNH TÀI"
+                        elif tp < 1.85: cmd = f"🔥 VẢ {out['name'].upper()}"
 
-                    # QUYẾT ĐỊNH LỆNH THEO Ý IDOL
-                    cmd = "🔎 BÁO CÁO"
-                    if is_du_tai and "TĂNG" in move: cmd = "🚨 VẢ CỰC MẠNH XỈU"
-                    elif is_du_xiu and "GIẢM" in move: cmd = "🚨 VẢ CỰC MẠNH TÀI"
-                    elif tp < 1.85: cmd = "🔥 VẢ TÀI (DÒNG TIỀN)"
-                    elif tp > 2.05: cmd = "🔥 VẢ XỈU (DÒNG TIỀN)"
+                        if cmd:
+                            msg = f"🏟️ *{cmd}*\n⚽ {home}-{away}\n📊 {mkt['key']} {out['name']} {tl}\n📈 {old_tp}->{tp}\n🪤 Bẫy: {'Dụ Tài' if is_du_tai else 'Dụ Xỉu' if is_du_xiu else 'None'}"
+                            send_tele(msg)
+                            with open(DB_FILE, "a") as f:
+                                f.write(f"{home} vs {away},None,{cmd},{tl},WAITING\n")
 
-                    if trap != "Không bẫy" or move != "ỔN ĐỊNH ➖":
-                        msg = f"🏟️ *{cmd}*\n"
-                        msg += f"⚽ {home} vs {away} ({st_vn.strftime('%H:%M')})\n"
-                        msg += f"📜 H2H: {avg_g:.1f} | 🎯 Kèo: {tl}\n"
-                        msg += f"🪤 Bẫy: {trap}\n"
-                        msg += f"📈 Odd: {old_tp} ➔ {tp} ({move})\n"
-                        if "🔎" in cmd: msg += "👉 *Idol xem biến động rồi tự quyết!*"
-                        send_tele(msg)
-
-    send_tele(f"✅ Phiên {now_vn.strftime('%H:%M')} hoàn tất! Shark đang trực chiến. 🦈")
+    send_tele(f"✅ Phiên {now_vn.strftime('%H:%M')} hoàn tất! 🦈")
 
 if __name__ == "__main__":
     main()
