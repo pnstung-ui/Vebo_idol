@@ -2,8 +2,8 @@ name: Shark AI Automated
 
 on:
   schedule:
-    - cron: '0 13-20 * * *'  # Chạy mỗi tiếng từ 20h đến 02h sáng (Giờ VN)
-  workflow_dispatch:        # Nút bấm quét tay thủ công
+    - cron: '0 13-19 * * *'  # 20h - 02h VN
+  workflow_dispatch:        # Nút bấm Manual
 
 jobs:
   build:
@@ -24,7 +24,8 @@ jobs:
           pip install pandas requests
 
       - name: Run Shark AI
-          # Đảm bảo tên file SharkAPI.py trùng với file code của Idol
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: python SharkAPI.py
 
       - name: Commit and push changes
@@ -32,5 +33,5 @@ jobs:
           git config --global user.name "Shark-Bot-Automated"
           git config --global user.email "pnstung@gmail.com"
           git add shark_history_log.csv odds_tracker.csv
-          git commit -m "Shark update history and memory [skip ci]" || exit 0
+          git commit -m "Shark update [skip ci]" || exit 0
           git push
