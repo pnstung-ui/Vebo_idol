@@ -136,11 +136,11 @@ def main():
                         elif tp < 1.85: cmd = f"🔥 VẢ {out['name'].upper()}"
 
                         if cmd:
-                            msg = f"🏟️ *{cmd}*\n⚽ {home}-{away}\n📊 {mkt['key']} {out['name']} {tl}\n📈 {old_tp}->{tp}\n🪤 Bẫy: {'Dụ Tài' if is_du_tai else 'Dụ Xỉu' if is_du_xiu else 'None'}"
+                            msg = f"🏟️ *{cmd}*\n⚽ {home}-{away}\n📊 {mkt['key']} {out['name']} {tl}\n📈 {old_tp}->{tp} ({move})\n🪤 Bẫy: {'Dụ Tài' if is_du_tai else 'Dụ Xỉu' if is_du_xiu else 'None'}"
                             send_tele(msg)
-                            with open(DB_FILE, "a") as f:
-                                f.write(f"{home} vs {away},None,{cmd},{tl},WAITING\n")
-
+                            # Lưu log bằng pandas để đồng bộ với hàm audit
+                            log_data = pd.DataFrame([{'Match': f"{home} vs {away}", 'Trap': 'None', 'Pick': cmd, 'Line': tl, 'Status': 'WAITING'}])
+                            log_data.to_csv(DB_FILE, mode='a', index=False, header=not os.path.isfile(DB_FILE))
     send_tele(f"✅ Phiên {now_vn.strftime('%H:%M')} hoàn tất! 🦈")
 
 if __name__ == "__main__":
