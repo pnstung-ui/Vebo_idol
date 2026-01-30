@@ -30,7 +30,9 @@ def send_tele(msg):
 def audit_results(db_results):
     if not os.path.isfile(DB_FILE) or db_results.empty: return
     
-    try: history = pd.read_csv(DB_FILE, names=['Match', 'Trap', 'Pick', 'Line', 'Status'])
+    try: 
+        history = pd.read_csv(DB_FILE)
+        if history.empty: return
     except: return
 
     updated = False
@@ -47,16 +49,15 @@ def audit_results(db_results):
                 line = float(row['Line'])
                 pick, status = row['Pick'], "HÒA"
                 
-                # Logic Tài Xỉu (Cho đơn giản, Idol có thể thêm logic Chấp sau)
-                if "TÀI" in pick: status = "✅ HÚP" if total > line else "❌ GÃY" if total < line else "➖ HÒA"
-                elif "XỈU" in pick: status = "✅ HÚP" if total < line else "❌ GÃY" if total > line else "➖ HÒA"
+                if "TÀI" in pick.upper(): status = "✅ HÚP" if total > line else "❌ GÃY" if total < line else "➖ HÒA"
+                elif "XỈU" in pick.upper(): status = "✅ HÚP" if total < line else "❌ GÃY" if total > line else "➖ HÒA"
                 
                 history.at[idx, 'Status'] = status
                 summary += f"🏟️ {row['Match']}\n🎯 {pick} {line} | KQ: {hg}-{ag} -> *{status}*\n\n"
                 updated = True
 
     if updated:
-        history.to_csv(DB_FILE, index=False, header=False)
+        history.to_csv(DB_FILE, index=False)
         send_tele(summary)
 
 def track_odds_movement(match_id, current_odd):
@@ -80,7 +81,7 @@ def track_odds_movement(match_id, current_odd):
     return move, old_val
 
 def get_h2h_db():
-    sources = ["E0", "E1", "SP1", "SP2", "I1", "I2", "D1", "D2", "F1", "F2", "N1", "B1"]
+    sources = ["E0", "E1", "E2", "SP1", "SP2", "I1", "I2", "D1", "D2", "F1", "F2", "N1", "B1"]
     all_dfs = []
     for s in sources:
         try:
@@ -99,7 +100,7 @@ def main():
     # 1. NẾU LÀ 8H SÁNG: CHỈ AUDIT KẾT QUẢ
     if 7 <= now_vn.hour <= 9:
         audit_results(db)
-        if not is_manual: return # Sáng chỉ audit xong nghỉ
+        if not is_manual: return
 
     # 2. CHẾ ĐỘ QUÉT KÈO (20H - 03H)
     if not (20 <= now_vn.hour or now_vn.hour < 3) and not is_manual:
@@ -114,33 +115,36 @@ def main():
         st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
         
         if now_vn < st_vn < now_vn + timedelta(hours=12):
-            # Check sử bẫy
-            h2h = db[((db['HomeTeam'] == home) & (db['AwayTeam'] == away)) | ((db['HomeTeam'] == away) & (db['AwayTeam'] == home))]
-            avg_g = h2h['FTHG'].add(h2h['FTAG']).head(4).mean() if not h2h.empty else 2.5
+            # --- ĐỐI CHIẾU LỊCH SỬ ---
+            h2h_matches = db[((db['HomeTeam'] == home) & (db['AwayTeam'] == away)) | ((db['HomeTeam'] == away) & (db['AwayTeam'] == home))]
+            avg_g = h2h_matches['FTHG'].add(h2h_matches['FTAG']).head(4).mean() if not h2h_matches.empty else 2.5
 
             for bm in m.get('bookmakers', [])[:1]:
                 for mkt in bm['markets']:
                     for out in mkt['outcomes']:
-                        tl = out.get('point', 0)
-                        tp = out['price']
+                        tl, tp = out.get('point', 0), out['price']
                         match_id = f"{home}_{away}_{mkt['key']}_{out['name']}_{tl}"
                         move, old_tp = track_odds_movement(match_id, tp)
                         
-                        # Logic Trap & Vả
+                        # --- PHÂN TÍCH BẪY (TRAP) ---
                         is_du_tai = (mkt['key'] == 'totals' and avg_g >= 2.75 and tl <= 2.25)
                         is_du_xiu = (mkt['key'] == 'totals' and avg_g <= 2.0 and tl >= 2.5)
-                        
+                        trap_name = "DỤ TÀI" if is_du_tai else "DỤ XỈU" if is_du_xiu else "Không"
+
                         cmd = ""
+                        # Nếu bẫy + odd thuận hướng -> VẢ MẠNH
                         if is_du_tai and "TĂNG" in move: cmd = "🚨 VẢ MẠNH XỈU"
                         elif is_du_xiu and "GIẢM" in move: cmd = "🚨 VẢ MẠNH TÀI"
                         elif tp < 1.85: cmd = f"🔥 VẢ {out['name'].upper()}"
 
-                        if cmd:
-                            msg = f"🏟️ *{cmd}*\n⚽ {home}-{away}\n📊 {mkt['key']} {out['name']} {tl}\n📈 {old_tp}->{tp} ({move})\n🪤 Bẫy: {'Dụ Tài' if is_du_tai else 'Dụ Xỉu' if is_du_xiu else 'None'}"
+                        if cmd and move != "ỔN ĐỊNH ➖":
+                            msg = f"🏟️ *{cmd}*\n⚽ {home}-{away}\n📊 {mkt['key']} {out['name']} {tl}\n📈 {old_tp}->{tp} ({move})\n📜 H2H: {avg_g:.1f} | 🪤 Bẫy: {trap_name}"
                             send_tele(msg)
+                            
                             # Lưu log bằng pandas để đồng bộ với hàm audit
-                            log_data = pd.DataFrame([{'Match': f"{home} vs {away}", 'Trap': 'None', 'Pick': cmd, 'Line': tl, 'Status': 'WAITING'}])
-                            log_data.to_csv(DB_FILE, mode='a', index=False, header=not os.path.isfile(DB_FILE))
+                            new_log = pd.DataFrame([{'Match': f"{home} vs {away}", 'Trap': trap_name, 'Pick': cmd, 'Line': tl, 'Status': 'WAITING'}])
+                            new_log.to_csv(DB_FILE, mode='a', index=False, header=not os.path.isfile(DB_FILE))
+
     send_tele(f"✅ Phiên {now_vn.strftime('%H:%M')} hoàn tất! 🦈")
 
 if __name__ == "__main__":
