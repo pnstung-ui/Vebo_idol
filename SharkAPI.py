@@ -4,7 +4,7 @@ import io
 import os
 from datetime import datetime, timedelta
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH MASTER ---
 LIST_KEYS = ["f45bf78df6e60adb0d2d6d1d9e0f7c1c", "43a45057d6df74eab8e05251ca88993c"]
 TELE_TOKEN = "7981423606:AAFvJ5Xin_L62k-q0lKY8BPpoOa4PSoE7Ys"
 TELE_CHAT_ID = "957306386"
@@ -26,52 +26,8 @@ def send_tele(msg):
     try: requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
     except: pass
 
-# --- HÀM THAM CHIẾU KẾT QUẢ THÔNG MINH ---
-def audit_results(db_results):
-    if not os.path.isfile(DB_FILE) or db_results.empty: return
-    try: 
-        history = pd.read_csv(DB_FILE)
-        if history.empty: return
-    except: return
-
-    updated = False
-    summary = "📊 *TỔNG KẾT KÈO ĐÊM QUA*\n\n"
-
-    for idx, row in history.iterrows():
-        if row['Status'] == 'WAITING':
-            teams = row['Match'].split(' vs ')
-            h_api, a_api = teams[0], teams[1]
-            
-            # Khớp tên thông minh (dùng 5 ký tự đầu để tránh lệch Man Utd/Manchester)
-            res = db_results[
-                (db_results['HomeTeam'].str.contains(h_api[:5], case=False, na=False)) & 
-                (db_results['AwayTeam'].str.contains(a_api[:5], case=False, na=False))
-            ]
-            
-            if not res.empty:
-                hg, ag = res.iloc[0]['FTHG'], res.iloc[0]['FTAG']
-                total, line, pick = hg + ag, float(row['Line']), row['Pick'].upper()
-                status = "HÒA"
-                
-                # Tham chiếu kết quả dựa trên loại kèo
-                if "TÀI" in pick:
-                    status = "✅ HÚP" if total > line else "❌ GÃY" if total < line else "➖ HÒA"
-                elif "XỈU" in pick:
-                    status = "✅ HÚP" if total < line else "❌ GÃY" if total > line else "➖ HÒA"
-                elif "VẢ MẠNH" in pick or "VẢ" in pick: # Đối với kèo chấp
-                    diff = hg - ag # Hiệu số thực tế
-                    # Logic so sánh kèo chấp (Tạm thời báo KQ để Idol check)
-                    status = f"Kết quả: {hg}-{ag}"
-                
-                history.at[idx, 'Status'] = status
-                summary += f"🏟️ {row['Match']}\n🎯 {row['Pick']} {line} | KQ: {hg}-{ag} -> *{status}*\n\n"
-                updated = True
-
-    if updated:
-        history.to_csv(DB_FILE, index=False)
-        send_tele(summary)
-
 def get_h2h_db():
+    # Mở rộng nguồn để quét đủ các giải theo yêu cầu Idol
     sources = ["E0", "E1", "E2", "E3", "SP1", "SP2", "I1", "I2", "D1", "D2", "F1", "F2", "N1", "B1"]
     all_dfs = []
     for s in sources:
@@ -87,6 +43,7 @@ def track_odds_movement(match_id, current_odd):
     else:
         try: df = pd.read_csv(ODDS_TRACKER)
         except: df = pd.DataFrame(columns=['match_id', 'old_odd', 'last_update'])
+    
     move, old_val = "Scan đầu", "N/A"
     match_row = df[df['match_id'] == match_id]
     if not match_row.empty:
@@ -104,16 +61,10 @@ def main():
     is_manual = os.getenv('GITHUB_EVENT_NAME') == 'workflow_dispatch'
     db = get_h2h_db()
     
-    # 1. THAM CHIẾU LỊCH SỬ (7h - 11h sáng VN)
-    if 7 <= now_vn.hour <= 11:
-        audit_results(db)
-        if not is_manual: return
-
-    # 2. CHẾ ĐỘ QUÉT KÈO (20h - 03h sáng VN)
-    if not (20 <= now_vn.hour or now_vn.hour < 3) and not is_manual: return
+    # 1. QUY TRÌNH SĂN BẪY (20h - 04h)
+    if not (20 <= now_vn.hour or now_vn.hour < 4) and not is_manual: return
 
     try:
-        # Quét cả kèo chấp (h2h) và tài xỉu (totals)
         data = requests.get(f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={API_KEY}&regions=eu&markets=h2h,totals").json()
     except: return
 
@@ -121,9 +72,17 @@ def main():
         home, away = m['home_team'], m['away_team']
         st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
         if now_vn < st_vn < now_vn + timedelta(hours=12):
-            # --- CHÂN KINH BẪY ---
-            h2h_m = db[((db['HomeTeam'].str.contains(home[:5], na=False)) & (db['AwayTeam'].str.contains(away[:5], na=False)))]
-            avg_g = h2h_m['FTHG'].add(h2h_m['FTAG']).head(4).mean() if not h2h_m.empty else 2.5
+            # --- THAM CHIẾU LỊCH SỬ 2 TRẬN GẦN NHẤT ---
+            h2h_m = db[((db['HomeTeam'].str.contains(home[:5], na=False)) & (db['AwayTeam'].str.contains(away[:5], na=False))) |
+                       ((db['HomeTeam'].str.contains(away[:5], na=False)) & (db['AwayTeam'].str.contains(home[:5], na=False)))]
+            
+            if h2h_m.empty: continue
+            
+            # Lấy 2 trận gần nhất để so sánh bẫy
+            last_2 = h2h_m.head(2)
+            avg_g = last_2['FTHG'].add(last_2['FTAG']).mean()
+            # Tính hiệu số trung bình để soi bẫy chấp
+            avg_diff = (last_2['FTHG'] - last_2['FTAG']).mean()
 
             for bm in m.get('bookmakers', [])[:1]:
                 for mkt in bm['markets']:
@@ -132,25 +91,36 @@ def main():
                         match_id = f"{home}_{away}_{mkt['key']}_{out['name']}_{tl}"
                         move, old_tp = track_odds_movement(match_id, tp)
                         
-                        # Logic Bẫy (Trap)
-                        is_du_tai = (mkt['key'] == 'totals' and avg_g >= 2.75 and tl <= 2.25)
-                        is_du_xiu = (mkt['key'] == 'totals' and avg_g <= 2.0 and tl >= 2.5)
-                        trap = "DỤ TÀI" if is_du_tai else "DỤ XỈU" if is_du_xiu else "Không"
-
-                        # QUYẾT ĐỊNH VẢ
+                        trap = "Không"
                         cmd = ""
-                        if is_du_tai and "TĂNG" in move: cmd = "🚨 VẢ MẠNH XỈU"
-                        elif is_du_xiu and "GIẢM" in move: cmd = "🚨 VẢ MẠNH TÀI"
-                        elif tp < 1.85: cmd = f"🔥 VẢ {out['name'].upper()}"
 
-                        if cmd and move != "ỔN ĐỊNH ➖":
-                            msg = f"🏟️ *{cmd}*\n⚽ {home}-{away}\n📊 {mkt['key'].upper()} {out['name']} {tl}\n📈 {old_tp}->{tp} ({move})\n📜 H2H: {avg_g:.1f} | 🪤 Bẫy: {trap}"
+                        # --- LOGIC BẪY TÀI XỈU (DỰA TRÊN SO SÁNH KÈO HIỆN TẠI) ---
+                        if mkt['key'] == 'totals':
+                            # Dụ Tài: Lịch sử nổ nhiều (avg_g cao) nhưng kèo nhà cái cho thấp (tl thấp)
+                            if avg_g - tl >= 1.0: trap = "DỤ TÀI"
+                            # Dụ Xỉu: Lịch sử ít bàn (avg_g thấp) nhưng kèo nhà cái cho cao (tl cao)
+                            elif tl - avg_g >= 1.0: trap = "DỤ XỈU"
+                            
+                            # Lệnh Vả theo biến động tiền
+                            if trap == "DỤ TÀI" and "TĂNG" in move: cmd = "🚨 VẢ MẠNH XỈU"
+                            elif trap == "DỤ XỈU" and "GIẢM" in move: cmd = "🚨 VẢ MẠNH TÀI"
+
+                        # --- LOGIC BẪY CHẤP (H2H) ---
+                        elif mkt['key'] == 'h2h':
+                            # So sánh chênh lệch bàn thắng lịch sử với việc nhà cái đánh giá đội thắng
+                            if abs(avg_diff) >= 1.5 and tp > 2.2: trap = "BẪY CHẤP (Kèo thơm ảo)"
+                            
+                            if tp < 1.85: cmd = f"🔥 VẢ {out['name'].upper()}"
+
+                        # Chỉ bắn tin khi có biến động hoặc phát hiện bẫy
+                        if (trap != "Không" or move != "ỔN ĐỊNH ➖") and cmd != "":
+                            msg = f"🏟️ *{cmd}*\n⚽ {home}-{away}\n📊 {mkt['key'].upper()} {out['name']} {tl}\n📈 {old_tp}->{tp} ({move})\n📜 H2H (2 trận): Ghi bàn {avg_g:.1f} | HS: {avg_diff:.1f}\n🪤 Bẫy: {trap}"
                             send_tele(msg)
-                            # Lưu log định dạng chuẩn để sáng mai Tham Chiếu
+                            
                             new_log = pd.DataFrame([{'Match': f"{home} vs {away}", 'Trap': trap, 'Pick': cmd, 'Line': tl, 'Status': 'WAITING'}])
                             new_log.to_csv(DB_FILE, mode='a', index=False, header=not os.path.isfile(DB_FILE))
 
-    send_tele(f"✅ Phiên {now_vn.strftime('%H:%M')} rực rỡ! 🦈")
+    send_tele(f"✅ Phiên {now_vn.strftime('%H:%M')} मास्टर (Master) hoàn tất! 🦈")
 
 if __name__ == "__main__":
     main()
