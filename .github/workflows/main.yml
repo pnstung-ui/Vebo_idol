@@ -2,11 +2,10 @@ name: Shark AI Automated
 
 on:
   schedule:
-    # Chạy mỗi giờ từ 08:00 UTC (15:00 VN) đến 03:00 UTC hôm sau (10:00 VN)
-    - cron: '0 8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,0,1,2,3 * * *' 
+    # Chạy mỗi giờ: 08:00 VN (1 UTC) và từ 20:00 VN đến 10:00 VN hôm sau
+    - cron: '0 1,13,14,15,16,17,18,19,20,21,22,23,0,1,2,3 * * *' 
   workflow_dispatch:
 
-# --- DÒNG QUAN TRỌNG NHẤT ĐỂ HẾT LỖI ---
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
 
