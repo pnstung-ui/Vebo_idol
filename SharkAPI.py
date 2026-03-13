@@ -4,7 +4,7 @@ import io
 import os
 from datetime import datetime, timedelta
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH MASTER ---
 LIST_KEYS = ["f45bf78df6e60adb0d2d6d1d9e0f7c1c", "43a45057d6df74eab8e05251ca88993c"]
 TELE_TOKEN = "7981423606:AAFvJ5Xin_L62k-q0lKY8BPpoOa4PSoE7Ys"
 TELE_CHAT_ID = "957306386"
@@ -26,22 +26,20 @@ def send_tele(msg):
     try: requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
     except: pass
 
-# --- HÀM ĐIỀU KHIỂN TELEGRAM ---
 def get_tele_command():
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/getUpdates"
     try:
         r = requests.get(url).json()
         if r["result"]:
             last_msg = r["result"][-1]["message"]
-            msg_text = last_msg["text"].lower()
-            msg_time = datetime.fromtimestamp(last_last_msg["date"])
-            if datetime.now() - msg_time < timedelta(minutes=10):
+            msg_text = last_msg.get("text", "").lower()
+            msg_time = datetime.fromtimestamp(last_msg["date"])
+            if datetime.now() - msg_time < timedelta(minutes=15):
                 return msg_text
     except: pass
     return None
 
 def get_h2h_db():
-    # Mở rộng nguồn giải như Idol yêu cầu
     sources = ["E0", "E1", "E2", "E3", "SP1", "SP2", "I1", "I2", "D1", "D2", "F1", "F2", "N1", "B1", "P1", "T1", "SC0"]
     all_dfs = []
     for s in sources:
@@ -53,7 +51,9 @@ def get_h2h_db():
 
 def audit_results(db_results):
     if not os.path.isfile(DB_FILE) or db_results.empty: return
-    history = pd.read_csv(DB_FILE)
+    try:
+        history = pd.read_csv(DB_FILE)
+    except: return
     updated = False
     summary = "📊 *TỔNG KẾT HÚP GÃY*\n\n"
     for idx, row in history.iterrows():
@@ -72,18 +72,28 @@ def audit_results(db_results):
         send_tele(summary)
 
 def track_odds_movement(match_id, current_odd):
-    if not os.path.isfile(ODDS_TRACKER):
+    # SỬA LỖI: Chống file trống và lỗi đọc file
+    if not os.path.isfile(ODDS_TRACKER) or os.stat(ODDS_TRACKER).st_size == 0:
         df = pd.DataFrame(columns=['match_id', 'old_odd', 'last_update'])
     else:
-        df = pd.read_csv(ODDS_TRACKER)
+        try:
+            df = pd.read_csv(ODDS_TRACKER)
+        except:
+            df = pd.DataFrame(columns=['match_id', 'old_odd', 'last_update'])
+    
     move, old_val = "Scan đầu", current_odd
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     match_row = df[df['match_id'] == match_id]
+    
     if not match_row.empty:
         old_val = float(match_row.iloc[0]['old_odd'])
         move = "GIẢM 📉" if current_odd < old_val else "TĂNG 📈" if current_odd > old_val else "ỔN ĐỊNH ➖"
-        df.loc[df['match_id'] == match_id, ['old_odd', 'last_update']] = [current_odd, datetime.now()]
+        # SỬA LỖI: Ép kiểu thời gian sang string để tránh lỗi dtype
+        df.loc[df['match_id'] == match_id, ['old_odd', 'last_update']] = [current_odd, now_str]
     else:
-        df = pd.concat([df, pd.DataFrame([{'match_id': match_id, 'old_odd': current_odd, 'last_update': datetime.now()}])], ignore_index=True)
+        new_row = pd.DataFrame([{'match_id': match_id, 'old_odd': current_odd, 'last_update': now_str}])
+        df = pd.concat([df, new_row], ignore_index=True)
+        
     df.to_csv(ODDS_TRACKER, index=False)
     return move, old_val
 
@@ -92,16 +102,15 @@ def main():
     db = get_h2h_db()
     cmd = get_tele_command()
 
-    # Lệnh thủ công từ Idol
+    # Nhận lệnh Tele
     if cmd == "quét":
         send_tele("🦈 Shark đang quét kèo theo yêu cầu...")
     elif cmd == "kết quả":
         audit_results(db)
         return
 
-    # Khung giờ chạy tự động: 15h - 10h sáng
+    # Khung giờ: 15h - 10h sáng
     if not (15 <= now_vn.hour <= 23 or 0 <= now_vn.hour <= 10) and cmd != "quét": return
-
     if 8 <= now_vn.hour <= 10: audit_results(db)
 
     try:
@@ -125,19 +134,17 @@ def main():
                         move, old_tp = track_odds_movement(match_id, tp)
                         gap = tl - avg_g
 
-                        # --- LOGIC CHUẨN IDOL ---
                         msg_vả, pick = "", ""
-                        if gap >= 1.75 and "GIẢM" in move:
+                        # Logic nén lò xo (Tài)
+                        if out['name'].upper() == 'OVER' and gap >= 1.75 and "GIẢM" in move:
                             msg_vả, pick = "🚨 VẢ MẠNH TÀI (NÉN LÒ XO)", "TÀI"
-                        elif gap <= -1.25 and avg_g >= 3.0 and "TĂNG" in move:
+                        # Logic bẫy xả (Xỉu)
+                        elif out['name'].upper() == 'OVER' and gap <= -1.25 and avg_g >= 3.0 and "TĂNG" in move:
                             msg_vả, pick = "🚨 VẢ MẠNH XỈU (BẪY XẢ)", "XỈU"
 
                         if msg_vả:
-                            msg = f"{msg_vả}\n🏟️ {home}-{away}\n📊 Kèo: {tl} | Odd: {tp} ({move})\n📜 Sử: {avg_g:.1f} | Gap: {gap:+.1f}"
-                            send_tele(msg)
+                            send_tele(f"{msg_vả}\n🏟️ {home}-{away}\n📊 Kèo: {tl} | Odd: {tp} ({move})\n📜 Sử: {avg_g:.1f} | Gap: {gap:+.1f}")
                             pd.DataFrame([{'Match': f"{home} vs {away}", 'Line': tl, 'Pick': pick, 'Status': 'WAITING'}]).to_csv(DB_FILE, mode='a', index=False, header=not os.path.isfile(DB_FILE))
-
-    send_tele(f"✅ Phiên {now_vn.strftime('%H:%M')} hoàn tất! 🦈")
 
 if __name__ == "__main__":
     main()
