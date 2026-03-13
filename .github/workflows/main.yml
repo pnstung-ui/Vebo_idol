@@ -11,23 +11,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Đã cập nhật lên v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # Đã cập nhật lên v5
         with:
-          python-version: '3.9'
+          python-version: '3.11' # Dùng bản 3.11 cho ổn định
 
       - name: Install dependencies
         run: pip install pandas requests
 
       - name: Run Shark AI
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: python SharkAPI.py
 
-      - name: Commit changes
+      - name: Commit and push changes
         run: |
-          git config --global user.name "Shark-Bot"
+          git config --global user.name "Shark-Bot-Automated"
           git config --global user.email "bot@shark.com"
           git add shark_history_log.csv odds_tracker.csv
-          git commit -m "Update logs" || exit 0
+          git commit -m "Shark update [skip ci]" || exit 0
           git push
