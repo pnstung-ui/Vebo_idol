@@ -4,7 +4,7 @@ import io
 import os
 from datetime import datetime, timedelta
 
-# --- CẤU HÌNH MASTER ---
+# --- CẤU HÌNH ---
 LIST_KEYS = ["f45bf78df6e60adb0d2d6d1d9e0f7c1c", "43a45057d6df74eab8e05251ca88993c"]
 TELE_TOKEN = "7981423606:AAFvJ5Xin_L62k-q0lKY8BPpoOa4PSoE7Ys"
 TELE_CHAT_ID = "957306386"
@@ -26,110 +26,23 @@ def send_tele(msg):
     try: requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
     except: pass
 
-def check_tele_commands():
+# --- HÀM ĐIỀU KHIỂN TELEGRAM ---
+def get_tele_command():
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/getUpdates"
     try:
-        updates = requests.get(url).json()
-        if not updates["result"]: return None
-        # Lấy tin nhắn cuối cùng trong vòng 5 phút đổ lại
-        last_update = updates["result"][-1]
-        msg_text = last_update["message"]["text"].lower()
-        msg_time = datetime.fromtimestamp(last_update["message"]["date"])
-        if datetime.now() - msg_time < timedelta(minutes=10):
-            return msg_text
+        r = requests.get(url).json()
+        if r["result"]:
+            last_msg = r["result"][-1]["message"]
+            msg_text = last_msg["text"].lower()
+            msg_time = datetime.fromtimestamp(last_last_msg["date"])
+            if datetime.now() - msg_time < timedelta(minutes=10):
+                return msg_text
     except: pass
     return None
 
-def track_odds_movement(match_id, current_tp):
-    if not os.path.isfile(ODDS_TRACKER):
-        df = pd.DataFrame(columns=['match_id', 'old_tp', 'last_update'])
-    else:
-        df = pd.read_csv(ODDS_TRACKER)
-    
-    move, old_val = "Scan đầu", current_tp
-    match_row = df[df['match_id'] == match_id]
-    if not match_row.empty:
-        old_val = float(match_row.iloc[0]['old_tp'])
-        move = "GIẢM 📉" if current_tp < old_val else "TĂNG 📈" if current_tp > old_val else "ỔN ĐỊNH ➖"
-        df.loc[df['match_id'] == match_id, ['old_tp', 'last_update']] = [current_tp, datetime.now()]
-    else:
-        df = pd.concat([df, pd.DataFrame([{'match_id': match_id, 'old_tp': current_tp, 'last_update': datetime.now()}])], ignore_index=True)
-    df.to_csv(ODDS_TRACKER, index=False)
-    return move, old_val
-
-def audit_results(db, manual=False):
-    if not os.path.isfile(DB_FILE): return
-    history = pd.read_csv(DB_FILE)
-    if history.empty: return
-    updated = False
-    summary = "📊 *KẾT QUẢ CHIẾN ĐOÀN SHARK*\n\n"
-    for idx, row in history.iterrows():
-        if row['Status'] == 'WAITING':
-            teams = row['Match'].split(' vs ')
-            res = db[(db['HomeTeam'].str.contains(teams[0][:4], case=False, na=False)) & (db['AwayTeam'].str.contains(teams[1][:4], case=False, na=False))]
-            if not res.empty:
-                hg, ag = res.iloc[0]['FTHG'], res.iloc[0]['FTAG']
-                total, line, pick = hg+ag, float(row['Line']), row['Pick']
-                status = "✅ HÚP" if (pick == 'TÀI' and total > line) or (pick == 'XỈU' and total < line) else "❌ GÃY" if total != line else "➖ HÒA"
-                history.at[idx, 'Status'] = status
-                summary += f"🏟️ {row['Match']}\n🎯 {pick} {line} | KQ: {hg}-{ag} -> *{status}*\n\n"
-                updated = True
-    if updated:
-        history.to_csv(DB_FILE, index=False)
-        send_tele(summary)
-    elif manual: send_tele("🏟️ Chưa có kết quả mới đâu Idol!")
-
-def scan_keo(db, manual=False):
-    try:
-        data = requests.get(f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={API_KEY}&regions=eu&markets=totals").json()
-    except: return
-    for m in data:
-        home, away = m['home_team'], m['away_team']
-        st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
-        if datetime.now() + timedelta(hours=7) < st_vn < datetime.now() + timedelta(hours=19):
-            h2h_m = db[((db['HomeTeam'].str.contains(home[:4], na=False)) & (db['AwayTeam'].str.contains(away[:4], na=False))) |
-                       ((db['HomeTeam'].str.contains(away[:4], na=False)) & (db['AwayTeam'].str.contains(home[:4], na=False)))]
-            if not h2h_m.empty:
-                avg_g = h2h_m.head(2)['FTHG'].add(h2h_m.head(2)['FTAG']).mean()
-                for bm in m.get('bookmakers', [])[:1]:
-                    for mkt in bm['markets']:
-                        for out in mkt['outcomes']:
-                            tl, tp = out['point'], out['price']
-                            match_id = f"{home}_{away}_{tl}"
-                            move, old_tp = track_odds_movement(match_id, tp)
-                            gap = tl - avg_g
-                            
-                            cmd, pick = "", ""
-                            if out['name'].upper() == 'OVER':
-                                if gap >= 1.75 and "GIẢM" in move: cmd, pick = "🚨 VẢ MẠNH TÀI (NÉN LÒ XO)", "TÀI"
-                                elif gap <= -1.25 and avg_g >= 3.0 and "TĂNG" in move: cmd, pick = "🚨 VẢ MẠNH XỈU (BẪY XẢ KÈO)", "XỈU"
-                            
-                            if cmd:
-                                send_tele(f"{cmd}\n🏟️ {home}-{away}\n📊 Kèo: {tl} | Odd: {tp} ({move})\n📜 Sử: {avg_g:.1f} | Gap: {gap:+.1f}")
-                                pd.DataFrame([{'Match':f"{home} vs {away}", 'Line':tl, 'Pick':pick, 'Status':'WAITING'}]).to_csv(DB_FILE, mode='a', index=False, header=not os.path.isfile(DB_FILE))
-
-def main():
-    now_vn = datetime.now() + timedelta(hours=7)
-    db = get_h2h_db()
-    cmd = check_tele_commands()
-    
-    # 1. ƯU TIÊN LỆNH TỪ IDOL
-    if cmd == "quét":
-        send_tele("🦈 Shark đang quét kèo theo lệnh Idol...")
-        scan_keo(db, manual=True)
-    elif cmd == "kết quả":
-        audit_results(db, manual=True)
-    
-    # 2. CHẠY TỰ ĐỘNG THEO KHUNG GIỜ (15h - 10h sáng hôm sau)
-    # 15h đến 23h HOẶC 00h đến 10h sáng
-    if (15 <= now_vn.hour <= 23) or (0 <= now_vn.hour <= 10):
-        # Sáng (8-10h) thì ưu tiên audit kết quả
-        if 8 <= now_vn.hour <= 10: audit_results(db)
-        # Các giờ còn lại quét kèo
-        scan_keo(db)
-
 def get_h2h_db():
-    sources = ["E0", "E1", "E2", "E3", "SP1", "SP2", "I1", "I2", "D1", "D2", "F1", "F2", "N1", "B1", "P1", "T1", "SC0", "G1", "A1"]
+    # Mở rộng nguồn giải như Idol yêu cầu
+    sources = ["E0", "E1", "E2", "E3", "SP1", "SP2", "I1", "I2", "D1", "D2", "F1", "F2", "N1", "B1", "P1", "T1", "SC0"]
     all_dfs = []
     for s in sources:
         try:
@@ -137,6 +50,94 @@ def get_h2h_db():
             if r.status_code == 200: all_dfs.append(pd.read_csv(io.StringIO(r.text)))
         except: continue
     return pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
+
+def audit_results(db_results):
+    if not os.path.isfile(DB_FILE) or db_results.empty: return
+    history = pd.read_csv(DB_FILE)
+    updated = False
+    summary = "📊 *TỔNG KẾT HÚP GÃY*\n\n"
+    for idx, row in history.iterrows():
+        if row['Status'] == 'WAITING':
+            teams = row['Match'].split(' vs ')
+            res = db_results[(db_results['HomeTeam'].str.contains(teams[0][:4], na=False)) & (db_results['AwayTeam'].str.contains(teams[1][:4], na=False))]
+            if not res.empty:
+                hg, ag = res.iloc[0]['FTHG'], res.iloc[0]['FTAG']
+                total, line, pick = hg + ag, float(row['Line']), row['Pick']
+                status = "✅ HÚP" if (pick == 'TÀI' and total > line) or (pick == 'XỈU' and total < line) else "❌ GÃY" if total != line else "➖ HÒA"
+                history.at[idx, 'Status'] = status
+                summary += f"🏟️ {row['Match']}\n🎯 {pick} {line} | KQ: {hg}-{ag} -> *{status}*\n\n"
+                updated = True
+    if updated:
+        history.to_csv(DB_FILE, index=False)
+        send_tele(summary)
+
+def track_odds_movement(match_id, current_odd):
+    if not os.path.isfile(ODDS_TRACKER):
+        df = pd.DataFrame(columns=['match_id', 'old_odd', 'last_update'])
+    else:
+        df = pd.read_csv(ODDS_TRACKER)
+    move, old_val = "Scan đầu", current_odd
+    match_row = df[df['match_id'] == match_id]
+    if not match_row.empty:
+        old_val = float(match_row.iloc[0]['old_odd'])
+        move = "GIẢM 📉" if current_odd < old_val else "TĂNG 📈" if current_odd > old_val else "ỔN ĐỊNH ➖"
+        df.loc[df['match_id'] == match_id, ['old_odd', 'last_update']] = [current_odd, datetime.now()]
+    else:
+        df = pd.concat([df, pd.DataFrame([{'match_id': match_id, 'old_odd': current_odd, 'last_update': datetime.now()}])], ignore_index=True)
+    df.to_csv(ODDS_TRACKER, index=False)
+    return move, old_val
+
+def main():
+    now_vn = datetime.now() + timedelta(hours=7)
+    db = get_h2h_db()
+    cmd = get_tele_command()
+
+    # Lệnh thủ công từ Idol
+    if cmd == "quét":
+        send_tele("🦈 Shark đang quét kèo theo yêu cầu...")
+    elif cmd == "kết quả":
+        audit_results(db)
+        return
+
+    # Khung giờ chạy tự động: 15h - 10h sáng
+    if not (15 <= now_vn.hour <= 23 or 0 <= now_vn.hour <= 10) and cmd != "quét": return
+
+    if 8 <= now_vn.hour <= 10: audit_results(db)
+
+    try:
+        data = requests.get(f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={API_KEY}&regions=eu&markets=totals").json()
+    except: return
+
+    for m in data:
+        home, away = m['home_team'], m['away_team']
+        st_vn = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=7)
+        if now_vn < st_vn < now_vn + timedelta(hours=15):
+            h2h_m = db[((db['HomeTeam'].str.contains(home[:4], na=False)) & (db['AwayTeam'].str.contains(away[:4], na=False))) |
+                       ((db['HomeTeam'].str.contains(away[:4], na=False)) & (db['AwayTeam'].str.contains(home[:4], na=False)))]
+            if h2h_m.empty: continue
+            avg_g = h2h_m.head(2)['FTHG'].add(h2h_m.head(2)['FTAG']).mean()
+
+            for bm in m.get('bookmakers', [])[:1]:
+                for mkt in bm['markets']:
+                    for out in mkt['outcomes']:
+                        tl, tp = out.get('point', 0), out['price']
+                        match_id = f"{home}_{away}_{tl}"
+                        move, old_tp = track_odds_movement(match_id, tp)
+                        gap = tl - avg_g
+
+                        # --- LOGIC CHUẨN IDOL ---
+                        msg_vả, pick = "", ""
+                        if gap >= 1.75 and "GIẢM" in move:
+                            msg_vả, pick = "🚨 VẢ MẠNH TÀI (NÉN LÒ XO)", "TÀI"
+                        elif gap <= -1.25 and avg_g >= 3.0 and "TĂNG" in move:
+                            msg_vả, pick = "🚨 VẢ MẠNH XỈU (BẪY XẢ)", "XỈU"
+
+                        if msg_vả:
+                            msg = f"{msg_vả}\n🏟️ {home}-{away}\n📊 Kèo: {tl} | Odd: {tp} ({move})\n📜 Sử: {avg_g:.1f} | Gap: {gap:+.1f}"
+                            send_tele(msg)
+                            pd.DataFrame([{'Match': f"{home} vs {away}", 'Line': tl, 'Pick': pick, 'Status': 'WAITING'}]).to_csv(DB_FILE, mode='a', index=False, header=not os.path.isfile(DB_FILE))
+
+    send_tele(f"✅ Phiên {now_vn.strftime('%H:%M')} hoàn tất! 🦈")
 
 if __name__ == "__main__":
     main()
