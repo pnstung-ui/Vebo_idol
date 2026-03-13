@@ -7,7 +7,8 @@ on:
   workflow_dispatch:
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # Ép chạy Node 24 để hết lỗi Idol nhé
+  # Dòng này giúp dọn sạch cái cảnh báo Idol vừa thấy
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
 
 jobs:
   build:
